@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { HiOutlineMoon, HiOutlineSun } from 'react-icons/hi2';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 
@@ -10,7 +9,10 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const [isDark, setIsDark] = useState(true);
+  const [isDark] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    return saved ? saved === 'dark' : true;
+  });
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -23,11 +25,6 @@ export default function Login() {
     };
     window.addEventListener('mousemove', handleMouse);
     return () => window.removeEventListener('mousemove', handleMouse);
-  }, []);
-
-  useEffect(() => {
-    const savedTheme = localStorage.getItem('theme') || 'dark';
-    setIsDark(savedTheme === 'dark');
   }, []);
 
   useEffect(() => {
@@ -92,18 +89,6 @@ export default function Login() {
           backgroundSize: '50px 50px',
         }}
       />
-
-      <button
-        onClick={() => setIsDark(!isDark)}
-        className="absolute top-6 right-6 z-20 p-2.5 rounded-xl border border-gray-300 dark:border-white/10 bg-white/80 dark:bg-dark-700/70 hover:bg-white dark:hover:bg-dark-700 transition-colors"
-        title={isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
-      >
-        {isDark ? (
-          <HiOutlineSun className="w-5 h-5 text-yellow-400" />
-        ) : (
-          <HiOutlineMoon className="w-5 h-5 text-blue-600" />
-        )}
-      </button>
 
       {/* Login card */}
       <motion.div
