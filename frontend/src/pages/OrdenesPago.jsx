@@ -92,8 +92,8 @@ export default function OrdenesPago() {
       a.download = `comprobante.${tipo === 'pdf' ? 'pdf' : 'docx'}`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      toast.error(`Error generando ${tipo.toUpperCase()}`);
+    } catch (err) {
+      toast.error(err?.response?.data?.error || `Error generando ${tipo.toUpperCase()}`);
     } finally {
       setTimeout(() => {
         setGenerandoDoc(null);
@@ -116,8 +116,8 @@ export default function OrdenesPago() {
       setPdfUrl(url);
       setPdfNumOrden(orden.numero_orden);
       setShowPdfViewer(true);
-    } catch {
-      toast.error('Error generando PDF');
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Error generando PDF');
     } finally {
       setTimeout(() => {
         setGenerandoDoc(null);

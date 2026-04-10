@@ -1,5 +1,19 @@
 const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
 const { logger } = require('../utils/logger');
+
+function isAdminRequest(req) {
+  const auth = req.headers.authorization || '';
+  if (!auth.startsWith('Bearer ')) return false;
+
+  const token = auth.slice(7);
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    return decoded && decoded.rol === 'admin';
+  } catch {
+    return false;
+  }
+}
 
 // Rate limit para login (5 intentos por IP en 15 minutos)
 const loginLimiter = rateLimit({
@@ -17,18 +31,19 @@ const loginLimiter = rateLimit({
 // Rate limit general para API (100 requests por IP en 15 minutos)
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: parseInt(process.env.API_RATE_LIMIT_MAX || '600', 10),
   standardHeaders: false,
-  skip: (req) => process.env.NODE_ENV === 'development',
+  skip: (req) => process.env.NODE_ENV === 'development' || isAdminRequest(req),
 });
 
 // Rate limit para generación de documentos (evita saturación de Puppeteer)
 // 10 requests por IP en 1 minuto
 const documentLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 10,
+  max: parseInt(process.env.DOCUMENT_RATE_LIMIT_MAX || '60', 10),
   message: 'Demasiadas solicitudes de generación de documentos',
   standardHeaders: false,
+  skip: (req) => process.env.NODE_ENV === 'development' || isAdminRequest(req),
 });
 
 // Middleware de error manejador global (NO derriba el servidor)

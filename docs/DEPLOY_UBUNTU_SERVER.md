@@ -36,6 +36,20 @@ npm -v
 sudo npm install -g pm2
 ```
 
+Instalar dependencias del sistema para generar PDF con Puppeteer:
+
+```bash
+sudo apt install -y \
+    libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 \
+    libgbm1 libgtk-3-0 libasound2t64 libxshmfence1 fonts-liberation
+```
+
+Instalar Python para migraciones Access -> PostgreSQL:
+
+```bash
+sudo apt install -y python3 python3-pip python3-psycopg2
+```
+
 ## 4. Instalar PostgreSQL
 
 ```bash
@@ -87,6 +101,10 @@ DB_PASSWORD=0000
 JWT_SECRET=CAMBIAR_SECRET_LARGO_Y_UNICO
 CORS_ORIGIN=http://10.22.169.94:8082
 LOG_LEVEL=info
+
+# Opcional: ajustar límites de peticiones en producción
+API_RATE_LIMIT_MAX=600
+DOCUMENT_RATE_LIMIT_MAX=60
 EOF
 ```
 

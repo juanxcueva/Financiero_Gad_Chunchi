@@ -124,7 +124,20 @@ function setCachedPdf(cacheKey, buffer) {
 }
 
 async function renderPdfBuffer(html) {
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  const launchOptions = {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+    ],
+  };
+
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  const browser = await puppeteer.launch(launchOptions);
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
@@ -283,6 +296,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
 
 // GET /api/documentos/:id/pdf
 router.get('/:id/pdf', authMiddleware, asyncHandler(async (req, res) => {
+  const startTime = Date.now();
   try {
     const ordenResult = await pool.query('SELECT * FROM financiero.ordenes_pago WHERE id = $1', [req.params.id]);
     if (ordenResult.rows.length === 0) {
@@ -329,7 +343,6 @@ router.get('/:id/pdf', authMiddleware, asyncHandler(async (req, res) => {
     });
 
     let pendingTask = pendingPdfTasks.get(cacheKey);
-    const startTime = Date.now();
     if (!pendingTask) {
       pendingTask = documentQueue.enqueue(async () => {
         const html = buildHtml(orden, retResult.rows, firmResult.rows, config, logoBase64);
@@ -366,7 +379,7 @@ router.get('/:id/pdf', authMiddleware, asyncHandler(async (req, res) => {
       orden_id: req.params.id,
       time_ms: Date.now() - startTime,
     });
-    console.error('Error generando PDF:', err);
+    logger.error({ err, orden_id: req.params.id }, 'Error generando PDF');
     res.status(500).json({ success: false, error: 'Error generando PDF' });
   }
 }));

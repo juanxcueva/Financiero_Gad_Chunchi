@@ -8,6 +8,9 @@ const { globalErrorHandler, operationTimeout, loginLimiter, apiLimiter, document
 
 const app = express();
 
+// Detrás de Nginx, confiar en 1 proxy para obtener IP real del cliente.
+app.set('trust proxy', 1);
+
 // Middlewares de seguridad y observabilidad
 app.use(httpLogger);
 app.use(cors({
