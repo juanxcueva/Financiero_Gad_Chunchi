@@ -21,6 +21,7 @@ Firewall recomendado:
 ```bash
 sudo ufw allow OpenSSH
 sudo ufw allow 'Nginx Full'
+sudo ufw allow 8082/tcp
 sudo ufw enable
 sudo ufw status
 ```
@@ -84,7 +85,7 @@ DB_NAME=financiero_gad_chunchi
 DB_USER=financiero_user
 DB_PASSWORD=0000
 JWT_SECRET=CAMBIAR_SECRET_LARGO_Y_UNICO
-CORS_ORIGIN=http://10.22.169.94
+CORS_ORIGIN=http://10.22.169.94:8082
 LOG_LEVEL=info
 EOF
 ```
@@ -228,10 +229,56 @@ Activar sitio:
 
 ```bash
 sudo ln -sf /etc/nginx/sites-available/financiero /etc/nginx/sites-enabled/financiero
+sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
 sudo systemctl enable nginx
 ```
+
+### Si el puerto 80 ya lo usa otro servicio
+
+Si ya tienes Mayan EDMS o cualquier otro servicio ocupando `80`, no lo fuerces. Usa otro puerto para tu proyecto, por ejemplo `8082`.
+
+Cambios sugeridos:
+
+```nginx
+server {
+    listen 8082;
+    server_name _;
+
+    client_max_body_size 512m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+Luego recarga Nginx:
+
+```bash
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl start nginx
+sudo systemctl enable nginx
+sudo systemctl reload nginx
+```
+
+Y accede a la app como:
+
+```text
+http://IP_DEL_SERVIDOR:8082
+```
+
+Si prefieres usar el puerto 80 más adelante, cambia `CORS_ORIGIN` a `http://IP_DEL_SERVIDOR` sin el puerto.
 
 ## 11. Verificacion
 
