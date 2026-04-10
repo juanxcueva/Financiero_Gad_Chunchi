@@ -24,7 +24,30 @@ export default function OrdenesPago() {
   const [showPdfViewer, setShowPdfViewer] = useState(false);
   const [pdfUrl, setPdfUrl] = useState('');
   const [pdfNumOrden, setPdfNumOrden] = useState('');
+  const [generandoDoc, setGenerandoDoc] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(null);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+
+  const updateProgress = (id, tipo, progressEvent) => {
+    setDownloadProgress((prev) => {
+      const loaded = progressEvent?.loaded || 0;
+      const total = progressEvent?.total || 0;
+      if (total > 0) {
+        const percent = Math.min(100, Math.round((loaded / total) * 100));
+        return { id, tipo, percent, knownTotal: true };
+      }
+
+      const base = prev?.id === id && prev?.tipo === tipo ? prev.percent : 10;
+      return { id, tipo, percent: Math.min(90, base + 5), knownTotal: false };
+    });
+  };
+
+  const getProgressStage = (percent) => {
+    if (percent >= 100) return 'Documento listo';
+    if (percent >= 75) return 'Transfiriendo archivo';
+    if (percent >= 35) return 'Generando comprobante';
+    return 'Preparando solicitud';
+  };
 
   const fetchOrdenes = useCallback(async () => {
     try {
@@ -54,8 +77,15 @@ export default function OrdenesPago() {
   };
 
   const descargar = async (id, tipo) => {
+    if (generandoDoc) return;
+    setGenerandoDoc({ id, tipo });
+    setDownloadProgress({ id, tipo, percent: 10, knownTotal: false });
     try {
-      const { data } = await api.get(`/documentos/${id}/${tipo}`, { responseType: 'blob' });
+      const { data } = await api.get(`/documentos/${id}/${tipo}`, {
+        responseType: 'blob',
+        onDownloadProgress: (progressEvent) => updateProgress(id, tipo, progressEvent),
+      });
+      setDownloadProgress({ id, tipo, percent: 100, knownTotal: true });
       const url = URL.createObjectURL(data);
       const a = document.createElement('a');
       a.href = url;
@@ -64,18 +94,35 @@ export default function OrdenesPago() {
       URL.revokeObjectURL(url);
     } catch {
       toast.error(`Error generando ${tipo.toUpperCase()}`);
+    } finally {
+      setTimeout(() => {
+        setGenerandoDoc(null);
+        setDownloadProgress(null);
+      }, 250);
     }
   };
 
   const previsualizarPdf = async (orden) => {
+    if (generandoDoc) return;
+    setGenerandoDoc({ id: orden.id, tipo: 'pdf' });
+    setDownloadProgress({ id: orden.id, tipo: 'pdf', percent: 10, knownTotal: false });
     try {
-      const { data } = await api.get(`/documentos/${orden.id}/pdf`, { responseType: 'blob' });
+      const { data } = await api.get(`/documentos/${orden.id}/pdf`, {
+        responseType: 'blob',
+        onDownloadProgress: (progressEvent) => updateProgress(orden.id, 'pdf', progressEvent),
+      });
+      setDownloadProgress({ id: orden.id, tipo: 'pdf', percent: 100, knownTotal: true });
       const url = URL.createObjectURL(data);
       setPdfUrl(url);
       setPdfNumOrden(orden.numero_orden);
       setShowPdfViewer(true);
     } catch {
       toast.error('Error generando PDF');
+    } finally {
+      setTimeout(() => {
+        setGenerandoDoc(null);
+        setDownloadProgress(null);
+      }, 250);
     }
   };
 
@@ -190,11 +237,29 @@ export default function OrdenesPago() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => previsualizarPdf(o)} title="PDF" className="p-2 rounded-lg hover:bg-red-500/10 text-red-400 transition-colors">
-                        <HiOutlineDocumentArrowDown className="w-4 h-4" />
+                      <button
+                        onClick={() => previsualizarPdf(o)}
+                        title="PDF"
+                        disabled={Boolean(generandoDoc)}
+                        className="p-2 rounded-lg hover:bg-red-500/10 text-red-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {generandoDoc?.id === o.id && generandoDoc?.tipo === 'pdf' ? (
+                          <span className="block w-4 h-4 rounded-full border-2 border-red-400 border-t-transparent animate-spin" />
+                        ) : (
+                          <HiOutlineDocumentArrowDown className="w-4 h-4" />
+                        )}
                       </button>
-                      <button onClick={() => descargar(o.id, 'word')} title="Word" className="p-2 rounded-lg hover:bg-blue-500/10 text-blue-400 transition-colors text-xs font-bold">
-                        W
+                      <button
+                        onClick={() => descargar(o.id, 'word')}
+                        title="Word"
+                        disabled={Boolean(generandoDoc)}
+                        className="p-2 rounded-lg hover:bg-blue-500/10 text-blue-400 transition-colors text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {generandoDoc?.id === o.id && generandoDoc?.tipo === 'word' ? (
+                          <span className="block w-4 h-4 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
+                        ) : (
+                          'W'
+                        )}
                       </button>
                       {o.situacion === 'ACTIVO' && ['admin', 'financiero'].includes(user.rol) && (
                         <>
@@ -207,6 +272,11 @@ export default function OrdenesPago() {
                         </>
                       )}
                     </div>
+                    {generandoDoc?.id === o.id && (
+                      <p className="mt-1 text-[11px] text-center font-medium text-cyan-600 dark:text-cyan-300">
+                        Generando {generandoDoc.tipo === 'pdf' ? 'PDF' : 'Word'}...
+                      </p>
+                    )}
                   </td>
                 </motion.tr>
               ))}
@@ -276,6 +346,70 @@ export default function OrdenesPago() {
           onClose={cerrarPdfViewer}
         />
       )}
+
+      <AnimatePresence>
+        {generandoDoc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
+          >
+            <div className="glass rounded-2xl p-5 w-[390px] max-w-[92vw] border border-cyan-300/30 dark:border-cyan-400/20">
+              <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">
+                {generandoDoc.tipo === 'pdf' ? 'Generando PDF' : 'Generando Word'}
+              </p>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+                {downloadProgress?.knownTotal ? 'Descargando documento...' : 'Preparando documento en el servidor...'}
+              </p>
+              <div className="w-full h-3 rounded-full bg-gray-200/70 dark:bg-white/10 overflow-hidden relative">
+                <motion.div
+                  className="h-full bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${downloadProgress?.percent || 10}%` }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
+                />
+                <motion.div
+                  className="absolute top-0 bottom-0 w-10 bg-white/35 blur-[2px]"
+                  initial={{ x: -50 }}
+                  animate={{ x: 360 }}
+                  transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {downloadProgress?.knownTotal ? 'Progreso real' : 'Estimado'}
+                </p>
+                <p className="text-xs font-semibold text-cyan-400">
+                  {downloadProgress?.percent || 10}%
+                </p>
+              </div>
+
+              <div className="mt-3 rounded-xl bg-white/60 dark:bg-dark-700/60 border border-gray-200 dark:border-white/10 px-3 py-2">
+                <p className="text-xs text-gray-700 dark:text-gray-300 font-medium">
+                  {getProgressStage(downloadProgress?.percent || 10)}
+                </p>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+                  {[
+                    { label: 'Solicitud', doneAt: 25 },
+                    { label: 'Generación', doneAt: 70 },
+                    { label: 'Descarga', doneAt: 100 },
+                  ].map((step) => {
+                    const currentPercent = downloadProgress?.percent || 10;
+                    const done = currentPercent >= step.doneAt;
+                    return (
+                      <div key={step.label} className={`rounded-lg border px-2 py-1 text-center ${done ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-700 dark:text-cyan-300' : 'border-gray-300 dark:border-white/10 text-gray-500 dark:text-gray-400'}`}>
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle ${done ? 'bg-cyan-400' : 'bg-gray-400 dark:bg-gray-500'}`} />
+                        {step.label}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

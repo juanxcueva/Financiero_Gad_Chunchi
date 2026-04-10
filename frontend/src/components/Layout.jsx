@@ -20,7 +20,7 @@ export default function Layout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isDark, setIsDark] = useState(() => {
     const saved = localStorage.getItem('theme');
-    return saved ? saved === 'dark' : true;
+    return saved ? saved === 'dark' : false;
   });
   const navigate = useNavigate();
   const user = JSON.parse(localStorage.getItem('user') || '{}');

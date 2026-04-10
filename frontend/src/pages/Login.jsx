@@ -11,7 +11,7 @@ export default function Login() {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [isDark] = useState(() => {
     const saved = localStorage.getItem('theme');
-    return saved ? saved === 'dark' : true;
+    return saved ? saved === 'dark' : false;
   });
   const navigate = useNavigate();
 

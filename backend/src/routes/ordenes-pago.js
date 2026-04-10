@@ -3,174 +3,158 @@ const router = express.Router();
 const pool = require('../config/database');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { registrarAuditoria } = require('../utils/auditoria');
+const { validateBody } = require('../utils/validators');
+const { crearOrdenSchema, editarOrdenSchema } = require('../utils/validators');
+const { asyncHandler } = require('../middleware/common');
 
 // GET /api/ordenes-pago - listar con paginación y filtros
-router.get('/', authMiddleware, async (req, res) => {
-  try {
-    const { page = 1, limit = 20, search = '', estado = '', fecha_desde = '', fecha_hasta = '' } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+router.get('/', authMiddleware, asyncHandler(async (req, res) => {
+  const { page = 1, limit = 20, search = '', estado = '', fecha_desde = '', fecha_hasta = '' } = req.query;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    let conditions = [];
-    let params = [];
-    let paramIdx = 1;
+  let conditions = [];
+  let params = [];
+  let paramIdx = 1;
 
-    if (search) {
-      conditions.push(`(o.nombre_beneficiario ILIKE $${paramIdx} OR o.detalle ILIKE $${paramIdx} OR o.codigo_beneficiario ILIKE $${paramIdx} OR CAST(o.numero_orden AS TEXT) LIKE $${paramIdx})`);
-      params.push(`%${search}%`);
-      paramIdx++;
-    }
-
-    if (estado) {
-      conditions.push(`o.situacion = $${paramIdx}`);
-      params.push(estado);
-      paramIdx++;
-    }
-
-    if (fecha_desde) {
-      conditions.push(`o.fecha >= $${paramIdx}`);
-      params.push(fecha_desde);
-      paramIdx++;
-    }
-
-    if (fecha_hasta) {
-      conditions.push(`o.fecha <= $${paramIdx}`);
-      params.push(fecha_hasta);
-      paramIdx++;
-    }
-
-    const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
-
-    const countResult = await pool.query(
-      `SELECT COUNT(*) FROM financiero.ordenes_pago o ${whereClause}`,
-      params
-    );
-    const total = parseInt(countResult.rows[0].count);
-
-    const dataParams = [...params, parseInt(limit), offset];
-    const result = await pool.query(
-      `SELECT o.id, o.numero_orden, o.fecha, o.situacion,
-              o.codigo_beneficiario, o.nombre_beneficiario,
-              o.valor_planilla, o.valor_iva, o.total_cargos, o.total_retenciones, o.liquido_pagar,
-              o.cheque_numero, o.created_at
-       FROM financiero.ordenes_pago o
-       ${whereClause}
-       ORDER BY o.numero_orden DESC
-       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
-      dataParams
-    );
-
-    res.json({
-      success: true,
-      data: result.rows,
-      total,
-      page: parseInt(page),
-      totalPages: Math.ceil(total / parseInt(limit)),
-    });
-  } catch (err) {
-    console.error('Error listando órdenes:', err);
-    res.status(500).json({ success: false, error: 'Error interno' });
+  if (search) {
+    conditions.push(`(o.nombre_beneficiario ILIKE $${paramIdx} OR o.detalle ILIKE $${paramIdx} OR o.codigo_beneficiario ILIKE $${paramIdx} OR CAST(o.numero_orden AS TEXT) LIKE $${paramIdx})`);
+    params.push(`%${search}%`);
+    paramIdx++;
   }
-});
+
+  if (estado) {
+    conditions.push(`o.situacion = $${paramIdx}`);
+    params.push(estado);
+    paramIdx++;
+  }
+
+  if (fecha_desde) {
+    conditions.push(`o.fecha >= $${paramIdx}`);
+    params.push(fecha_desde);
+    paramIdx++;
+  }
+
+  if (fecha_hasta) {
+    conditions.push(`o.fecha <= $${paramIdx}`);
+    params.push(fecha_hasta);
+    paramIdx++;
+  }
+
+  const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+  const countResult = await pool.query(
+    `SELECT COUNT(*) FROM financiero.ordenes_pago o ${whereClause}`,
+    params
+  );
+  const total = parseInt(countResult.rows[0].count);
+
+  const dataParams = [...params, parseInt(limit), offset];
+  const result = await pool.query(
+    `SELECT o.id, o.numero_orden, o.fecha, o.situacion,
+            o.codigo_beneficiario, o.nombre_beneficiario,
+            o.valor_planilla, o.valor_iva, o.total_cargos, o.total_retenciones, o.liquido_pagar,
+            o.cheque_numero, o.created_at
+     FROM financiero.ordenes_pago o
+     ${whereClause}
+     ORDER BY o.numero_orden DESC
+     LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
+    dataParams
+  );
+
+  res.json({
+    success: true,
+    data: result.rows,
+    total,
+    page: parseInt(page),
+    totalPages: Math.ceil(total / parseInt(limit)),
+  });
+}));
 
 // GET /api/ordenes-pago/siguiente-numero
-router.get('/siguiente-numero', authMiddleware, async (req, res) => {
-  try {
-    const result = await pool.query("SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_orden'");
-    const numOrden = parseInt(result.rows[0]?.valor) || 1;
+router.get('/siguiente-numero', authMiddleware, asyncHandler(async (req, res) => {
+  const result = await pool.query("SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_orden'");
+  const numOrden = parseInt(result.rows[0]?.valor) || 1;
 
-    const resultCheque = await pool.query("SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_cheque'");
-    const numCheque = parseInt(resultCheque.rows[0]?.valor) || 1;
+  const resultCheque = await pool.query("SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_cheque'");
+  const numCheque = parseInt(resultCheque.rows[0]?.valor) || 1;
 
-    res.json({ success: true, data: { numero_orden: numOrden, numero_cheque: numCheque } });
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'Error interno' });
-  }
-});
+  res.json({ success: true, data: { numero_orden: numOrden, numero_cheque: numCheque } });
+}));
 
 // GET /api/ordenes-pago/estadisticas
-router.get('/estadisticas', authMiddleware, async (req, res) => {
-  try {
-    const totalResult = await pool.query('SELECT COUNT(*) as total FROM financiero.ordenes_pago');
-    const activasResult = await pool.query("SELECT COUNT(*) as total FROM financiero.ordenes_pago WHERE situacion = 'ACTIVO'");
-    const mesResult = await pool.query(
-      `SELECT COUNT(*) as total, COALESCE(SUM(liquido_pagar), 0) as monto
-       FROM financiero.ordenes_pago
-       WHERE fecha >= date_trunc('month', CURRENT_DATE) AND situacion = 'ACTIVO'`
-    );
-    const anioResult = await pool.query(
-      `SELECT COUNT(*) as total, COALESCE(SUM(liquido_pagar), 0) as monto
-       FROM financiero.ordenes_pago
-       WHERE fecha >= date_trunc('year', CURRENT_DATE) AND situacion = 'ACTIVO'`
-    );
-    const ultimasResult = await pool.query(
-      `SELECT numero_orden, fecha, nombre_beneficiario, liquido_pagar, situacion
-       FROM financiero.ordenes_pago ORDER BY numero_orden DESC LIMIT 5`
-    );
-    // Pagos mensuales del año actual
-    const mensualResult = await pool.query(
-      `SELECT to_char(fecha, 'YYYY-MM') as mes, COUNT(*) as cantidad, COALESCE(SUM(liquido_pagar),0) as monto
-       FROM financiero.ordenes_pago
-       WHERE fecha >= date_trunc('year', CURRENT_DATE) AND situacion = 'ACTIVO'
-       GROUP BY to_char(fecha, 'YYYY-MM')
-       ORDER BY mes`
-    );
+router.get('/estadisticas', authMiddleware, asyncHandler(async (req, res) => {
+  const totalResult = await pool.query('SELECT COUNT(*) as total FROM financiero.ordenes_pago');
+  const activasResult = await pool.query("SELECT COUNT(*) as total FROM financiero.ordenes_pago WHERE situacion = 'ACTIVO'");
+  const mesResult = await pool.query(
+    `SELECT COUNT(*) as total, COALESCE(SUM(liquido_pagar), 0) as monto
+     FROM financiero.ordenes_pago
+     WHERE fecha >= date_trunc('month', CURRENT_DATE) AND situacion = 'ACTIVO'`
+  );
+  const anioResult = await pool.query(
+    `SELECT COUNT(*) as total, COALESCE(SUM(liquido_pagar), 0) as monto
+     FROM financiero.ordenes_pago
+     WHERE fecha >= date_trunc('year', CURRENT_DATE) AND situacion = 'ACTIVO'`
+  );
+  const ultimasResult = await pool.query(
+    `SELECT numero_orden, fecha, nombre_beneficiario, liquido_pagar, situacion
+     FROM financiero.ordenes_pago ORDER BY numero_orden DESC LIMIT 5`
+  );
+  // Pagos mensuales del año actual
+  const mensualResult = await pool.query(
+    `SELECT to_char(fecha, 'YYYY-MM') as mes, COUNT(*) as cantidad, COALESCE(SUM(liquido_pagar),0) as monto
+     FROM financiero.ordenes_pago
+     WHERE fecha >= date_trunc('year', CURRENT_DATE) AND situacion = 'ACTIVO'
+     GROUP BY to_char(fecha, 'YYYY-MM')
+     ORDER BY mes`
+  );
 
-    res.json({
-      success: true,
-      data: {
-        total_ordenes: parseInt(totalResult.rows[0].total),
-        ordenes_activas: parseInt(activasResult.rows[0].total),
-        mes_actual: { cantidad: parseInt(mesResult.rows[0].total), monto: parseFloat(mesResult.rows[0].monto) },
-        anio_actual: { cantidad: parseInt(anioResult.rows[0].total), monto: parseFloat(anioResult.rows[0].monto) },
-        ultimas_ordenes: ultimasResult.rows,
-        pagos_mensuales: mensualResult.rows,
-      },
-    });
-  } catch (err) {
-    console.error('Error en estadísticas:', err);
-    res.status(500).json({ success: false, error: 'Error interno' });
-  }
-});
+  res.json({
+    success: true,
+    data: {
+      total_ordenes: parseInt(totalResult.rows[0].total),
+      ordenes_activas: parseInt(activasResult.rows[0].total),
+      mes_actual: { cantidad: parseInt(mesResult.rows[0].total), monto: parseFloat(mesResult.rows[0].monto) },
+      anio_actual: { cantidad: parseInt(anioResult.rows[0].total), monto: parseFloat(anioResult.rows[0].monto) },
+      ultimas_ordenes: ultimasResult.rows,
+      pagos_mensuales: mensualResult.rows,
+    },
+  });
+}));
 
 // GET /api/ordenes-pago/:id
-router.get('/:id', authMiddleware, async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM financiero.ordenes_pago WHERE id = $1', [req.params.id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Orden no encontrada' });
-    }
-
-    const retenciones = await pool.query(
-      'SELECT * FROM financiero.ordenes_pago_retenciones WHERE orden_pago_id = $1 ORDER BY id',
-      [req.params.id]
-    );
-
-    const otrosValores = await pool.query(
-      'SELECT * FROM financiero.ordenes_pago_otros_valores WHERE orden_pago_id = $1 ORDER BY id',
-      [req.params.id]
-    );
-
-    const firmantes = await pool.query(
-      'SELECT * FROM financiero.firmantes WHERE activo = true ORDER BY orden'
-    );
-
-    res.json({
-      success: true,
-      data: {
-        ...result.rows[0],
-        retenciones: retenciones.rows,
-        otros_valores: otrosValores.rows,
-        firmantes: firmantes.rows,
-      },
-    });
-  } catch (err) {
-    console.error('Error obteniendo orden:', err);
-    res.status(500).json({ success: false, error: 'Error interno' });
+router.get('/:id', authMiddleware, asyncHandler(async (req, res) => {
+  const result = await pool.query('SELECT * FROM financiero.ordenes_pago WHERE id = $1', [req.params.id]);
+  if (result.rows.length === 0) {
+    return res.status(404).json({ success: false, error: 'Orden no encontrada' });
   }
-});
+
+  const retenciones = await pool.query(
+    'SELECT * FROM financiero.ordenes_pago_retenciones WHERE orden_pago_id = $1 ORDER BY id',
+    [req.params.id]
+  );
+
+  const otrosValores = await pool.query(
+    'SELECT * FROM financiero.ordenes_pago_otros_valores WHERE orden_pago_id = $1 ORDER BY id',
+    [req.params.id]
+  );
+
+  const firmantes = await pool.query(
+    'SELECT * FROM financiero.firmantes WHERE activo = true ORDER BY orden'
+  );
+
+  res.json({
+    success: true,
+    data: {
+      ...result.rows[0],
+      retenciones: retenciones.rows,
+      otros_valores: otrosValores.rows,
+      firmantes: firmantes.rows,
+    },
+  });
+}));
 
 // POST /api/ordenes-pago
-router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), async (req, res) => {
+router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validateBody(crearOrdenSchema), asyncHandler(async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -183,10 +167,6 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), async (r
       cuenta_banco_central, codigo_inst_financiera,
       tipo_cuenta_beneficiario, cuenta_beneficiario,
     } = req.body;
-
-    if (!nombre_beneficiario || !detalle) {
-      return res.status(400).json({ success: false, error: 'Beneficiario y detalle son requeridos' });
-    }
 
     // Obtener siguiente número
     const numResult = await client.query(
@@ -340,10 +320,10 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), async (r
   } finally {
     client.release();
   }
-});
+}));
 
 // PUT /api/ordenes-pago/:id
-router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), async (req, res) => {
+router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), validateBody(editarOrdenSchema), asyncHandler(async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -446,42 +426,38 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), async 
   } finally {
     client.release();
   }
-});
+}));
 
 // PATCH /api/ordenes-pago/:id/anular
-router.patch('/:id/anular', authMiddleware, roleMiddleware('admin', 'financiero'), async (req, res) => {
-  try {
-    const { motivo } = req.body;
-    if (!motivo) {
-      return res.status(400).json({ success: false, error: 'Motivo de anulación requerido' });
-    }
-
-    const existing = await pool.query('SELECT * FROM financiero.ordenes_pago WHERE id = $1', [req.params.id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Orden no encontrada' });
-    }
-
-    await pool.query(
-      `UPDATE financiero.ordenes_pago SET situacion = 'ANULADO', motivo_anulacion = $1,
-       usuario_modificacion = $2, updated_at = NOW() WHERE id = $3`,
-      [motivo, req.user.id, req.params.id]
-    );
-
-    await registrarAuditoria({
-      tabla: 'ordenes_pago',
-      registro_id: parseInt(req.params.id),
-      accion: 'ANULAR',
-      datos_anteriores: { situacion: existing.rows[0].situacion },
-      datos_nuevos: { situacion: 'ANULADO', motivo },
-      usuario_id: req.user.id,
-      usuario_nombre: req.user.nombre,
-      ip_address: req.ip,
-    });
-
-    res.json({ success: true, message: 'Orden anulada' });
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'Error interno' });
+router.patch('/:id/anular', authMiddleware, roleMiddleware('admin', 'financiero'), asyncHandler(async (req, res) => {
+  const { motivo } = req.body;
+  if (!motivo) {
+    return res.status(400).json({ success: false, error: 'Motivo de anulación requerido' });
   }
-});
+
+  const existing = await pool.query('SELECT * FROM financiero.ordenes_pago WHERE id = $1', [req.params.id]);
+  if (existing.rows.length === 0) {
+    return res.status(404).json({ success: false, error: 'Orden no encontrada' });
+  }
+
+  await pool.query(
+    `UPDATE financiero.ordenes_pago SET situacion = 'ANULADO', motivo_anulacion = $1,
+     usuario_modificacion = $2, updated_at = NOW() WHERE id = $3`,
+    [motivo, req.user.id, req.params.id]
+  );
+
+  await registrarAuditoria({
+    tabla: 'ordenes_pago',
+    registro_id: parseInt(req.params.id),
+    accion: 'ANULAR',
+    datos_anteriores: { situacion: existing.rows[0].situacion },
+    datos_nuevos: { situacion: 'ANULADO', motivo },
+    usuario_id: req.user.id,
+    usuario_nombre: req.user.nombre,
+    ip_address: req.ip,
+  });
+
+  res.json({ success: true, message: 'Orden anulada' });
+}));
 
 module.exports = router;

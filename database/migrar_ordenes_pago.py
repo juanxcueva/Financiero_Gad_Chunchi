@@ -40,6 +40,16 @@ def limpiar_decimal(val):
         return 0
 
 
+def limpiar_porcentaje(val):
+    num = limpiar_decimal(val)
+    # La columna porcentaje es NUMERIC(6,3): rango maximo absoluto 999.999
+    if num > 999.999:
+        return 999.999
+    if num < -999.999:
+        return -999.999
+    return round(num, 3)
+
+
 def limpiar_entero(val):
     if val is None:
         return None
@@ -104,9 +114,11 @@ def migrar():
     for b in beneficiarios.values():
         cur.execute("""
             INSERT INTO financiero.beneficiarios (ruc_cedula, nombre, tipo_cuenta, cuenta_bancaria)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT DO NOTHING
-        """, (b['ruc_cedula'], b['nombre'], b['tipo_cuenta'], b['cuenta_bancaria']))
+            SELECT %s, %s, %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM financiero.beneficiarios WHERE ruc_cedula = %s
+            )
+        """, (b['ruc_cedula'], b['nombre'], b['tipo_cuenta'], b['cuenta_bancaria'], b['ruc_cedula']))
 
     conn.commit()
     print("Beneficiarios insertados.")
@@ -130,7 +142,7 @@ def migrar():
             retenciones_data = []
             for j in range(1, 9):
                 razon = limpiar_texto(row.get(f'Razon{j}'))
-                porcen = limpiar_decimal(row.get(f'Porcen{j}'))
+                porcen = limpiar_porcentaje(row.get(f'Porcen{j}'))
                 valor = limpiar_decimal(row.get(f'ValorRet{j}'))
                 if razon and (porcen > 0 or valor > 0):
                     retenciones_data.append({
@@ -144,7 +156,7 @@ def migrar():
             # Retenciones IVA
             for j in range(1, 3):
                 base_iva = limpiar_decimal(row.get(f'BaseIVA{j}'))
-                tasa_iva = limpiar_decimal(row.get(f'TasaIVA{j}'))
+                tasa_iva = limpiar_porcentaje(row.get(f'TasaIVA{j}'))
                 ret_iva = limpiar_decimal(row.get(f'RetIVA{j}'))
                 if ret_iva > 0:
                     retenciones_data.append({
@@ -158,7 +170,7 @@ def migrar():
             # Retenciones IR
             for j in range(1, 3):
                 base_ir = limpiar_decimal(row.get(f'BaseIR{j}'))
-                tasa_ir = limpiar_decimal(row.get(f'TasaIR{j}'))
+                tasa_ir = limpiar_porcentaje(row.get(f'TasaIR{j}'))
                 ret_ir = limpiar_decimal(row.get(f'RetIR{j}'))
                 if ret_ir > 0:
                     retenciones_data.append({
@@ -313,6 +325,15 @@ def migrar():
     cur.execute("SELECT MAX(numero_orden) FROM financiero.ordenes_pago")
     max_orden = cur.fetchone()[0]
     print(f"  Último número de orden: {max_orden}")
+
+    # Sincronizar consecutivo para nuevas órdenes creadas desde la API
+    if max_orden:
+        cur.execute(
+            "UPDATE financiero.configuracion SET valor = %s WHERE clave = 'siguiente_numero_orden'",
+            (str(int(max_orden) + 1),)
+        )
+        conn.commit()
+        print(f"  Siguiente número de orden configurado en: {int(max_orden) + 1}")
 
     cur.execute("SELECT COUNT(*) FROM financiero.beneficiarios")
     ben_count = cur.fetchone()[0]

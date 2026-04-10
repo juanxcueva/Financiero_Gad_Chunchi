@@ -1,14 +1,53 @@
 const express = require('express');
 const router = express.Router();
 const puppeteer = require('puppeteer');
+const crypto = require('crypto');
 const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, ImageRun } = require('docx');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/database');
 const { authMiddleware } = require('../middleware/auth');
 const { numeroALetras } = require('../utils/numero-letras');
+const { asyncHandler } = require('../middleware/common');
+const { logger, logDocumentMetric } = require('../utils/logger');
 
 const LOGO_PATH = path.join(__dirname, '..', '..', '..', 'logo_gad.png');
+const PDF_CACHE_TTL_MS = 10 * 60 * 1000;
+const PDF_CACHE_MAX_ENTRIES = 100;
+const pdfCache = new Map();
+const pendingPdfTasks = new Map();
+
+class TaskQueue {
+  constructor(concurrency = 2) {
+    this.concurrency = concurrency;
+    this.active = 0;
+    this.queue = [];
+  }
+
+  enqueue(task) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ task, resolve, reject });
+      this.runNext();
+    });
+  }
+
+  runNext() {
+    while (this.active < this.concurrency && this.queue.length > 0) {
+      const job = this.queue.shift();
+      this.active += 1;
+      Promise.resolve()
+        .then(job.task)
+        .then(job.resolve)
+        .catch(job.reject)
+        .finally(() => {
+          this.active -= 1;
+          this.runNext();
+        });
+    }
+  }
+}
+
+const documentQueue = new TaskQueue(2);
 
 function formatDate(dateStr) {
   if (!dateStr) return '';
@@ -22,20 +61,115 @@ function formatMoney(val) {
   return parseFloat(val || 0).toFixed(2);
 }
 
+function buildBalancedRows(items, maxPerRow = 4) {
+  if (!items || items.length === 0) return [];
+
+  const totalRows = Math.ceil(items.length / maxPerRow);
+  const baseSize = Math.floor(items.length / totalRows);
+  const extra = items.length % totalRows;
+
+  const rows = [];
+  let idx = 0;
+  for (let r = 0; r < totalRows; r++) {
+    const size = baseSize + (r < extra ? 1 : 0);
+    rows.push(items.slice(idx, idx + size));
+    idx += size;
+  }
+
+  return rows;
+}
+
+function getPreferredSignatureColumns(totalFirmantes) {
+  if (!totalFirmantes || totalFirmantes <= 0) return 1;
+  if (totalFirmantes <= 4) return totalFirmantes;
+  if (totalFirmantes % 4 === 0) return 4;
+  if (totalFirmantes % 3 === 0) return 3;
+
+  // Evita filas finales con una sola firma cuando no divide exacto en 4.
+  return totalFirmantes % 4 === 1 ? 3 : 4;
+}
+
+function padRowToColumns(row, columns) {
+  const missing = Math.max(0, columns - row.length);
+  const left = Math.floor(missing / 2);
+  const right = missing - left;
+  return {
+    left,
+    right,
+  };
+}
+
+function buildPdfVersionKey(orden, retenciones, firmantes, config, logoFingerprint) {
+  const hash = crypto.createHash('sha1');
+  hash.update(JSON.stringify({ orden, retenciones, firmantes, config, logoFingerprint }));
+  return hash.digest('hex');
+}
+
+function getCachedPdf(cacheKey) {
+  const entry = pdfCache.get(cacheKey);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    pdfCache.delete(cacheKey);
+    return null;
+  }
+  return entry.buffer;
+}
+
+function setCachedPdf(cacheKey, buffer) {
+  if (pdfCache.size >= PDF_CACHE_MAX_ENTRIES) {
+    const firstKey = pdfCache.keys().next().value;
+    if (firstKey) pdfCache.delete(firstKey);
+  }
+  pdfCache.set(cacheKey, { buffer, expiresAt: Date.now() + PDF_CACHE_TTL_MS });
+}
+
+async function renderPdfBuffer(html) {
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    return await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' },
+    });
+  } finally {
+    await browser.close();
+  }
+}
+
 function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
+  const allFirmantes = [
+    { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '' },
+    ...firmantes,
+  ];
+
   const retencionesRows = retenciones.map(r =>
     `<tr><td style="text-align:left;padding:2px 8px;">${r.concepto}</td>
      <td style="text-align:right;padding:2px 8px;">${formatMoney(r.porcentaje)}%</td>
      <td style="text-align:right;padding:2px 8px;">${formatMoney(r.valor)}</td></tr>`
   ).join('');
 
-  const firmantesCells = firmantes.map(f =>
-    `<td style="text-align:center;padding-top:40px;vertical-align:bottom;">
-       <div style="border-top:1px solid #000;padding-top:4px;">
-         <strong>${f.cargo}</strong><br/>${f.nombre}
-       </div>
-     </td>`
-  ).join('');
+  const preferredCols = getPreferredSignatureColumns(allFirmantes.length);
+  const firmantesRows = buildBalancedRows(allFirmantes, preferredCols);
+  const maxFirmantesCols = Math.max(1, ...firmantesRows.map(r => r.length));
+
+  const buildFirmaCellHtml = (cargo, nombre) => `
+    <td style="text-align:center;padding:5px;border:none;width:${(100 / maxFirmantesCols).toFixed(2)}%;">
+      <div class="firma-box">
+        <div class="firma-linea"></div>
+        <div class="firma-cargo">${cargo}</div>
+        <div class="firma-nombre">${nombre}</div>
+      </div>
+    </td>`;
+
+  const firmantesRowsHtml = firmantesRows.map((row) => {
+    const { left, right } = padRowToColumns(row, maxFirmantesCols);
+    const leftEmpty = Array.from({ length: left }, () => '<td style="border:none;"></td>').join('');
+    const rightEmpty = Array.from({ length: right }, () => '<td style="border:none;"></td>').join('');
+    const content = row.map((f) => buildFirmaCellHtml(f.cargo, f.nombre)).join('');
+    return `<tr>${leftEmpty}${content}${rightEmpty}</tr>`;
+  }).join('');
 
   // Otros cargos
   let otrosCargosHtml = '';
@@ -79,9 +213,11 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   .summary .total-line.big { font-size: 14px; font-weight: bold; border-top: 2px solid #000; padding-top: 8px; margin-top: 5px; }
   .letras { font-size: 12px; font-weight: bold; margin: 5px 0; }
   .cheque-info { font-size: 10px; margin: 5px 0; color: #555; }
-  .firmas { width: 100%; margin-top: 30px; border-collapse: collapse; }
-  .firmas td { width: 25%; text-align: center; padding: 5px; border: none; }
-  .firma-box { padding-top: 50px; vertical-align: bottom; }
+  .firmas-wrapper { margin-top: 30px; }
+  .firmas { width: 100%; border-collapse: collapse; page-break-inside: auto; break-inside: auto; }
+  .firmas tr { page-break-inside: avoid; break-inside: avoid-page; }
+  .firmas td { text-align: center; padding: 5px; border: none; }
+  .firma-box { padding-top: 50px; vertical-align: bottom; page-break-inside: avoid; break-inside: avoid; min-height: 92px; }
   .firma-linea { border-top: 1px solid #000; padding-top: 4px; margin-bottom: 20px; min-height: 15px; }
   .firma-nombre { font-size: 11px; }
   .firma-cargo { font-weight: bold; font-size: 11px; margin-bottom: 2px; }
@@ -136,48 +272,17 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
     Banco: ${config.banco_nombre || ''} &nbsp;&nbsp; ${orden.codigo_banco || ''}
   </div>
 
-  <table class="firmas">
-    <tr>
-      <td>
-        <div class="firma-box">
-          <div class="firma-linea"></div>
-          <div class="firma-cargo">C.I. Interesado</div>
-          <div class="firma-nombre">${orden.nombre_beneficiario}</div>
-        </div>
-      </td>
-      ${firmantes.slice(0, 3).map(f => `<td>
-        <div class="firma-box">
-          <div class="firma-linea"></div>
-          <div class="firma-cargo">${f.cargo}</div>
-          <div class="firma-nombre">${f.nombre}</div>
-        </div>
-      </td>`).join('')}
-    </tr>
-    ${firmantes.length > 3 ? `<tr>
-      ${firmantes.slice(3, 7).map(f => `<td>
-        <div class="firma-box">
-          <div class="firma-linea"></div>
-          <div class="firma-cargo">${f.cargo}</div>
-          <div class="firma-nombre">${f.nombre}</div>
-        </div>
-      </td>`).join('')}
-    </tr>` : ''}
-    ${firmantes.length > 7 ? `<tr>
-      ${firmantes.slice(7, 11).map(f => `<td>
-        <div class="firma-box">
-          <div class="firma-linea"></div>
-          <div class="firma-cargo">${f.cargo}</div>
-          <div class="firma-nombre">${f.nombre}</div>
-        </div>
-      </td>`).join('')}
-    </tr>` : ''}
-  </table>
+  <div class="firmas-wrapper">
+    <table class="firmas">
+      ${firmantesRowsHtml}
+    </table>
+  </div>
 </body>
 </html>`;
 }
 
 // GET /api/documentos/:id/pdf
-router.get('/:id/pdf', authMiddleware, async (req, res) => {
+router.get('/:id/pdf', authMiddleware, asyncHandler(async (req, res) => {
   try {
     const ordenResult = await pool.query('SELECT * FROM financiero.ordenes_pago WHERE id = $1', [req.params.id]);
     if (ordenResult.rows.length === 0) {
@@ -185,42 +290,89 @@ router.get('/:id/pdf', authMiddleware, async (req, res) => {
     }
     const orden = ordenResult.rows[0];
 
-    const retResult = await pool.query('SELECT * FROM financiero.ordenes_pago_retenciones WHERE orden_pago_id = $1 ORDER BY id', [req.params.id]);
-    const firmResult = await pool.query('SELECT * FROM financiero.firmantes WHERE activo = true ORDER BY orden');
-    const configResult = await pool.query('SELECT clave, valor FROM financiero.configuracion');
+    const [retResult, firmResult, configResult] = await Promise.all([
+      pool.query('SELECT * FROM financiero.ordenes_pago_retenciones WHERE orden_pago_id = $1 ORDER BY id', [req.params.id]),
+      pool.query('SELECT * FROM financiero.firmantes WHERE activo = true ORDER BY orden'),
+      pool.query('SELECT clave, valor FROM financiero.configuracion'),
+    ]);
+
     const config = {};
     configResult.rows.forEach(r => { config[r.clave] = r.valor; });
 
     let logoBase64 = null;
+    let logoFingerprint = 0;
     if (fs.existsSync(LOGO_PATH)) {
+      logoFingerprint = fs.statSync(LOGO_PATH).mtimeMs;
       logoBase64 = fs.readFileSync(LOGO_PATH).toString('base64');
     }
 
-    const html = buildHtml(orden, retResult.rows, firmResult.rows, config, logoBase64);
+    const versionKey = buildPdfVersionKey(orden, retResult.rows, firmResult.rows, config, logoFingerprint);
+    const cacheKey = `${req.params.id}:${versionKey}`;
+    const cachedPdf = getCachedPdf(cacheKey);
+    if (cachedPdf) {
+      logDocumentMetric('cache_hit', {
+        orden_id: req.params.id,
+        numero_orden: orden.numero_orden,
+        size_bytes: cachedPdf.length,
+      });
+      res.setHeader('X-PDF-Cache', 'HIT');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename=comprobante_${orden.numero_orden}.pdf`);
+      return res.send(cachedPdf);
+    }
 
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' },
+    logDocumentMetric('cache_miss', {
+      orden_id: req.params.id,
+      numero_orden: orden.numero_orden,
+      queue_depth: documentQueue.queue.length,
+      pending_tasks: pendingPdfTasks.size,
     });
 
-    await browser.close();
+    let pendingTask = pendingPdfTasks.get(cacheKey);
+    const startTime = Date.now();
+    if (!pendingTask) {
+      pendingTask = documentQueue.enqueue(async () => {
+        const html = buildHtml(orden, retResult.rows, firmResult.rows, config, logoBase64);
+        const pdfBuffer = await renderPdfBuffer(html);
+        setCachedPdf(cacheKey, pdfBuffer);
+        return pdfBuffer;
+      }).finally(() => {
+        pendingPdfTasks.delete(cacheKey);
+      });
+
+      pendingPdfTasks.set(cacheKey, pendingTask);
+    }
+
+    const pdfBuffer = await pendingTask;
+    const generationTime = Date.now() - startTime;
+
+    logDocumentMetric('pdf_generated', {
+      orden_id: req.params.id,
+      numero_orden: orden.numero_orden,
+      time_ms: generationTime,
+      size_bytes: pdfBuffer.length,
+      queue_depth: documentQueue.queue.length,
+      pending_tasks: pendingPdfTasks.size,
+    });
+
+    res.setHeader('X-PDF-Cache', 'MISS');
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=comprobante_${orden.numero_orden}.pdf`);
     res.send(pdfBuffer);
   } catch (err) {
+    logDocumentMetric('pdf_error', {
+      error: err.message,
+      orden_id: req.params.id,
+      time_ms: Date.now() - startTime,
+    });
     console.error('Error generando PDF:', err);
     res.status(500).json({ success: false, error: 'Error generando PDF' });
   }
-});
+}));
 
 // GET /api/documentos/:id/word
-router.get('/:id/word', authMiddleware, async (req, res) => {
+router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
   try {
     const ordenResult = await pool.query('SELECT * FROM financiero.ordenes_pago WHERE id = $1', [req.params.id]);
     if (ordenResult.rows.length === 0) {
@@ -321,82 +473,55 @@ router.get('/:id/word', authMiddleware, async (req, res) => {
       new TextRun({ text: `Cheque Nº ${orden.cheque_numero || ''}  Banco: ${config.banco_nombre || ''}  ${orden.codigo_banco || ''}`, size: 18, color: '666666' }),
     ] }));
 
-    // Signatures - Primera fila
+    // Signatures
     children.push(new Paragraph({ children: [] }));
     children.push(new Paragraph({ children: [] }));
     children.push(new Paragraph({ children: [] }));
-
-    const sigRow1 = [
-      new TableCell({
-        borders: noBorders,
-        children: [
-          new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '________________________', size: 18 })] }),
-          new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'C.I. Interesado', bold: true, size: 18 })] }),
-          new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: orden.nombre_beneficiario, size: 18 })] }),
-        ],
-      }),
+    const allFirmantesWord = [
+      { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '' },
+      ...firmResult.rows,
     ];
+    const preferredWordCols = getPreferredSignatureColumns(allFirmantesWord.length);
+    const wordRows = buildBalancedRows(allFirmantesWord, preferredWordCols);
+    const maxCols = Math.max(1, ...wordRows.map(r => r.length));
 
-    // Agregar primeros 3 firmantes a primera fila
-    for (const f of firmResult.rows.slice(0, 3)) {
-      sigRow1.push(new TableCell({
-        borders: noBorders,
-        children: [
-          new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '________________________', size: 18 })] }),
-          new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: f.cargo, bold: true, size: 18 })] }),
-          new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: f.nombre, size: 18 })] }),
-        ],
-      }));
+    const buildWordSignatureCell = (cargo, nombre) => new TableCell({
+      borders: noBorders,
+      width: { size: Math.floor(100 / maxCols), type: WidthType.PERCENTAGE },
+      children: [
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '________________________', size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: nombre, size: 18 })] }),
+      ],
+    });
+
+    const wordTableRows = [];
+    for (const row of wordRows) {
+      const { left, right } = padRowToColumns(row, maxCols);
+      const cells = [];
+      for (let i = 0; i < left; i++) {
+        cells.push(new TableCell({ borders: noBorders, children: [new Paragraph({ children: [] })] }));
+      }
+      for (const f of row) {
+        cells.push(buildWordSignatureCell(f.cargo, f.nombre));
+      }
+      for (let i = 0; i < right; i++) {
+        cells.push(new TableCell({ borders: noBorders, children: [new Paragraph({ children: [] })] }));
+      }
+
+      wordTableRows.push(new TableRow({ children: cells }));
     }
 
     children.push(new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [new TableRow({ children: sigRow1 })],
+      rows: wordTableRows,
     }));
-
-    // Segunda fila si hay más de 3 firmantes
-    if (firmResult.rows.length > 3) {
-      const sigRow2 = [];
-      for (const f of firmResult.rows.slice(3, 7)) {
-        sigRow2.push(new TableCell({
-          borders: noBorders,
-          children: [
-            new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '________________________', size: 18 })] }),
-            new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: f.cargo, bold: true, size: 18 })] }),
-            new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: f.nombre, size: 18 })] }),
-          ],
-        }));
-      }
-      children.push(new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        rows: [new TableRow({ children: sigRow2 })],
-      }));
-    }
-
-    // Tercera fila si hay más de 7 firmantes
-    if (firmResult.rows.length > 7) {
-      const sigRow3 = [];
-      for (const f of firmResult.rows.slice(7, 11)) {
-        sigRow3.push(new TableCell({
-          borders: noBorders,
-          children: [
-            new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '________________________', size: 18 })] }),
-            new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: f.cargo, bold: true, size: 18 })] }),
-            new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: f.nombre, size: 18 })] }),
-          ],
-        }));
-      }
-      children.push(new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        rows: [new TableRow({ children: sigRow3 })],
-      }));
-    }
 
     const doc = new Document({
       sections: [{ children }],
     });
 
-    const buffer = await Packer.toBuffer(doc);
+    const buffer = await documentQueue.enqueue(() => Packer.toBuffer(doc));
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename=comprobante_${orden.numero_orden}.docx`);
@@ -405,6 +530,6 @@ router.get('/:id/word', authMiddleware, async (req, res) => {
     console.error('Error generando Word:', err);
     res.status(500).json({ success: false, error: 'Error generando documento Word' });
   }
-});
+}));
 
 module.exports = router;

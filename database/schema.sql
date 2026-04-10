@@ -44,7 +44,7 @@ CREATE TABLE financiero.beneficiarios (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX idx_beneficiarios_ruc ON financiero.beneficiarios(ruc_cedula);
+CREATE UNIQUE INDEX idx_beneficiarios_ruc ON financiero.beneficiarios(ruc_cedula);
 CREATE INDEX idx_beneficiarios_nombre ON financiero.beneficiarios USING gin(nombre gin_trgm_ops);
 
 -- ============================================================================

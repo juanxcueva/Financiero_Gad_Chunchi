@@ -44,7 +44,9 @@ export default function Configuracion() {
       if (uRes?.data?.data) {
         setUsuarios(uRes.data.data);
       }
-    } catch { toast.error('Error cargando configuración'); }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Error cargando configuración');
+    }
   };
 
   useEffect(() => { fetchAll(); }, []);
@@ -169,14 +171,25 @@ export default function Configuracion() {
     if (u.id === currentUser.id) {
       return toast.error('No puede desactivar su propio usuario');
     }
-    if (!confirm(`¿Desactivar usuario ${u.username}?`)) return;
+
+    const accion = prompt(
+      `Usuario: ${u.username}\n` +
+      'Escriba DESACTIVAR para desactivar o ELIMINAR para borrar definitivamente.'
+    );
+    if (!accion) return;
+
+    const decision = accion.trim().toUpperCase();
+    if (decision !== 'DESACTIVAR' && decision !== 'ELIMINAR') {
+      return toast.error('Acción cancelada: use DESACTIVAR o ELIMINAR');
+    }
 
     try {
-      await api.delete(`/auth/usuarios/${u.id}`);
-      toast.success('Usuario desactivado');
+      const hard = decision === 'ELIMINAR';
+      await api.delete(`/auth/usuarios/${u.id}${hard ? '?hard=true' : ''}`);
+      toast.success(hard ? 'Usuario eliminado definitivamente' : 'Usuario desactivado');
       fetchAll();
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Error desactivando usuario');
+      toast.error(err.response?.data?.error || 'Error eliminando usuario');
     }
   };
 
@@ -208,11 +221,11 @@ export default function Configuracion() {
             <div className="flex gap-2">
               <input
                 type="text"
-                defaultValue={config.institucion || ''}
+                defaultValue={config.institucion_nombre || config.institucion || ''}
                 id="inst_input"
                 className="input-field flex-1"
               />
-              <button onClick={() => saveConfig('institucion', document.getElementById('inst_input').value)} className="btn-primary text-sm">Guardar</button>
+              <button onClick={() => saveConfig('institucion_nombre', document.getElementById('inst_input').value)} className="btn-primary text-sm">Guardar</button>
             </div>
           </div>
         </div>
