@@ -10,6 +10,7 @@ from psycopg2.extras import execute_values
 from datetime import datetime
 import os
 import sys
+import argparse
 
 # Configuración
 DB_CONFIG = {
@@ -20,7 +21,7 @@ DB_CONFIG = {
     'password': os.getenv('DB_PASSWORD', ''),
 }
 
-CSV_PATH = os.path.join(os.path.dirname(__file__), '..', 'migracion_output', 'APContabOrdenPago.csv')
+DEFAULT_CSV_PATH = os.path.join(os.path.dirname(__file__), '..', 'migracion_output', 'APContabOrdenPago.csv')
 
 
 def limpiar_texto(val):
@@ -74,24 +75,27 @@ def limpiar_fecha(val):
     return None
 
 
-def migrar():
+def migrar(csv_path):
     print("=" * 60)
     print("MIGRACIÓN: APContabOrdenPago → financiero.ordenes_pago")
     print("=" * 60)
 
-    if not os.path.exists(CSV_PATH):
-        print(f"ERROR: No se encontró el archivo CSV: {CSV_PATH}")
+    if not os.path.exists(csv_path):
+        print(f"ERROR: No se encontró el archivo CSV: {csv_path}")
         sys.exit(1)
+
+    print(f"CSV origen: {csv_path}")
 
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
 
     # Leer CSV
-    with open(CSV_PATH, 'r', encoding='utf-8', errors='replace') as f:
+    with open(csv_path, 'r', encoding='utf-8', errors='replace') as f:
         reader = csv.DictReader(f)
         rows = list(reader)
 
     print(f"Registros en CSV: {len(rows)}")
+    print(f"PROGRESS total={len(rows)} inserted=0 stage=reading_csv")
 
     # Primero extraer beneficiarios únicos e insertar
     beneficiarios = {}
@@ -122,9 +126,11 @@ def migrar():
 
     conn.commit()
     print("Beneficiarios insertados.")
+    print(f"PROGRESS total={len(rows)} inserted=0 stage=migrating")
 
     # Insertar órdenes de pago
     insertados = 0
+    omitidos = 0
     errores = 0
 
     for i, row in enumerate(rows):
@@ -238,6 +244,7 @@ def migrar():
                     %s, %s, %s,
                     %s, %s, %s, %s, %s
                 )
+                ON CONFLICT (numero_orden) DO NOTHING
                 RETURNING id
             """, (
                 num_orden,
@@ -280,7 +287,15 @@ def migrar():
                 limpiar_fecha(row.get('FechaMod')),
             ))
 
-            orden_id = cur.fetchone()[0]
+            inserted_row = cur.fetchone()
+            if inserted_row is None:
+                omitidos += 1
+                cur.execute("RELEASE SAVEPOINT sp_row")
+                if (omitidos + insertados) % 500 == 0:
+                    print(f"PROGRESS total={len(rows)} inserted={insertados} stage=migrating")
+                continue
+
+            orden_id = inserted_row[0]
 
             # Insertar retenciones
             for ret in retenciones_data:
@@ -301,9 +316,10 @@ def migrar():
             insertados += 1
             cur.execute("RELEASE SAVEPOINT sp_row")
 
-            if insertados % 5000 == 0:
+            if insertados % 500 == 0:
                 conn.commit()
                 print(f"  Progreso: {insertados} registros insertados...")
+                print(f"PROGRESS total={len(rows)} inserted={insertados} stage=migrating")
 
         except Exception as e:
             cur.execute("ROLLBACK TO SAVEPOINT sp_row")
@@ -315,6 +331,7 @@ def migrar():
 
     print(f"\nResultado:")
     print(f"  Insertados: {insertados}")
+    print(f"  Omitidos por duplicados: {omitidos}")
     print(f"  Errores: {errores}")
 
     # Verificar
@@ -341,8 +358,22 @@ def migrar():
 
     cur.close()
     conn.close()
+    print(f"PROGRESS total={len(rows)} inserted={insertados} stage=completed")
+    if omitidos > 0:
+        print(f"ATENCION: {omitidos} registros ya existian y se omitieron.")
     print("\nMigración completada.")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Migrar APContabOrdenPago.csv a PostgreSQL')
+    parser.add_argument(
+        '--csv-path',
+        default=os.getenv('ACCESS_CSV_PATH', DEFAULT_CSV_PATH),
+        help='Ruta del CSV a migrar (también puede usar ACCESS_CSV_PATH)'
+    )
+    return parser.parse_args()
+
+
 if __name__ == '__main__':
-    migrar()
+    args = parse_args()
+    migrar(args.csv_path)

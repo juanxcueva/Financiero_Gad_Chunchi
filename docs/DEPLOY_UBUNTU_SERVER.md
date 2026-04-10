@@ -47,7 +47,7 @@ Crear base y usuario:
 ```bash
 sudo -u postgres psql
 CREATE DATABASE financiero_gad_chunchi;
-CREATE USER financiero_user WITH ENCRYPTED PASSWORD 'CAMBIAR_PASSWORD_FUERTE';
+CREATE USER financiero_user WITH ENCRYPTED PASSWORD '0000';
 GRANT ALL PRIVILEGES ON DATABASE financiero_gad_chunchi TO financiero_user;
 \q
 ```
@@ -82,9 +82,9 @@ DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=financiero_gad_chunchi
 DB_USER=financiero_user
-DB_PASSWORD=CAMBIAR_PASSWORD_FUERTE
+DB_PASSWORD=0000
 JWT_SECRET=CAMBIAR_SECRET_LARGO_Y_UNICO
-CORS_ORIGIN=http://IP_O_DOMINIO_INTERNO
+CORS_ORIGIN=http://10.22.169.94
 LOG_LEVEL=info
 EOF
 ```
@@ -102,6 +102,77 @@ Migracion historica desde Access (opcional):
 ```bash
 cd /opt/financiero/app
 python3 database/migrar_ordenes_pago.py
+```
+
+### Migracion desde archivo Access en carpeta Samba (recomendado)
+
+Instalar herramientas para leer Access:
+
+```bash
+sudo apt install -y mdbtools samba
+```
+
+Crear carpetas compartidas:
+
+```bash
+sudo mkdir -p /srv/financiero/import /srv/financiero/procesados
+sudo chown -R $USER:$USER /srv/financiero
+chmod -R 775 /srv/financiero
+```
+
+Configurar Samba:
+
+```bash
+sudo cp /etc/samba/smb.conf /etc/samba/smb.conf.bak
+sudo nano /etc/samba/smb.conf
+```
+
+Agregar al final del archivo:
+
+```ini
+[financiero-import]
+    path = /srv/financiero/import
+    browseable = yes
+    writable = yes
+    read only = no
+    guest ok = no
+    valid users = TU_USUARIO_LINUX
+    create mask = 0664
+    directory mask = 0775
+```
+
+Crear usuario Samba y reiniciar servicio:
+
+```bash
+sudo smbpasswd -a TU_USUARIO_LINUX
+sudo systemctl restart smbd
+sudo systemctl enable smbd
+```
+
+Desde Windows, abrir:
+
+```text
+\\IP_DEL_SERVIDOR\financiero-import
+```
+
+Copiar ahi el archivo .mdb o .accdb y luego ejecutar en el servidor:
+
+```bash
+cd /opt/financiero/app
+bash database/importar_access_samba.sh
+```
+
+El script hace automaticamente:
+
+- Toma el ultimo archivo .mdb/.accdb de /srv/financiero/import
+- Exporta tabla APContabOrdenPago a CSV
+- Ejecuta la migracion a PostgreSQL
+
+Si quieres indicar un archivo exacto:
+
+```bash
+cd /opt/financiero/app
+bash database/importar_access_samba.sh /srv/financiero/import/MI_ARCHIVO.accdb
 ```
 
 ## 8. Build de frontend
@@ -137,7 +208,7 @@ server {
     listen 80;
     server_name _;
 
-    client_max_body_size 20m;
+    client_max_body_size 512m;
 
     location / {
         proxy_pass http://127.0.0.1:3001;

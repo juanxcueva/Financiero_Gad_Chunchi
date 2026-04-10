@@ -64,6 +64,11 @@ function globalErrorHandler(err, req, res, next) {
 // Middleware de timeout para operaciones largas (evita que se cuelgue)
 function operationTimeout(ms = 30000) {
   return (req, res, next) => {
+    // Uploads grandes se procesan en background; no cortar durante transferencia.
+    if ((req.originalUrl || '').startsWith('/api/migracion/access/upload')) {
+      return next();
+    }
+
     const timeout = setTimeout(() => {
       if (!res.headersSent) {
         logger.warn(`Request timeout: ${req.method} ${req.path} after ${ms}ms`);

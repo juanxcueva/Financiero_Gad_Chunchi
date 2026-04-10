@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { HiOutlineCog6Tooth, HiOutlinePlus, HiOutlinePencilSquare, HiOutlineTrash, HiOutlineXMark, HiOutlineUserGroup, HiOutlineReceiptPercent, HiOutlineUsers } from 'react-icons/hi2';
+import { HiOutlineCog6Tooth, HiOutlinePlus, HiOutlinePencilSquare, HiOutlineTrash, HiOutlineXMark, HiOutlineUserGroup, HiOutlineReceiptPercent, HiOutlineUsers, HiOutlineArrowUpTray } from 'react-icons/hi2';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 
@@ -23,6 +23,9 @@ export default function Configuracion() {
   const [modal, setModal] = useState(null);
   const [modalType, setModalType] = useState('');
   const [form, setForm] = useState({});
+  const [accessFile, setAccessFile] = useState(null);
+  const [uploadingAccess, setUploadingAccess] = useState(false);
+  const [migrationState, setMigrationState] = useState({ current: null, last: null });
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
   const fetchAll = async () => {
@@ -50,6 +53,57 @@ export default function Configuracion() {
   };
 
   useEffect(() => { fetchAll(); }, []);
+
+  const fetchMigrationStatus = async () => {
+    if (currentUser.rol !== 'admin') return;
+    try {
+      const { data } = await api.get('/migracion/access/status');
+      setMigrationState(data.data || { current: null, last: null });
+    } catch {
+      // silencioso: no bloquear pantalla de configuración por estado de migración
+    }
+  };
+
+  useEffect(() => {
+    fetchMigrationStatus();
+    const timer = setInterval(fetchMigrationStatus, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const uploadAccessAndMigrate = async () => {
+    if (!accessFile) return toast.error('Seleccione un archivo .mdb o .accdb');
+
+    const formData = new FormData();
+    formData.append('accessFile', accessFile);
+
+    setUploadingAccess(true);
+    try {
+      await api.post('/migracion/access/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success('Archivo subido, migración iniciada en segundo plano');
+      setAccessFile(null);
+      fetchMigrationStatus();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Error iniciando migración');
+    } finally {
+      setUploadingAccess(false);
+    }
+  };
+
+  const currentOrLastMigration = migrationState.current || migrationState.last;
+  const progress = currentOrLastMigration?.progress;
+  const progressPercent = Math.max(0, Math.min(100, progress?.percent || 0));
+  const stageLabel = {
+    queued: 'En cola',
+    running: 'Iniciando',
+    reading_csv: 'Leyendo CSV',
+    leyendo_csv: 'Leyendo CSV',
+    migrating: 'Migrando registros',
+    migrando: 'Migrando registros',
+    completed: 'Completado',
+    error: 'Error',
+  }[progress?.stage] || (progress?.stage || 'Sin estado');
 
   // Config save
   const saveConfig = async (key, value) => {
@@ -353,6 +407,86 @@ export default function Configuracion() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </Section>
+      )}
+
+      {currentUser.rol === 'admin' && (
+        <Section icon={HiOutlineArrowUpTray} title="Migración Access">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Suba un archivo .mdb o .accdb para ejecutar la migración en segundo plano.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-center">
+            <input
+              type="file"
+              accept=".mdb,.accdb"
+              onChange={(e) => setAccessFile(e.target.files?.[0] || null)}
+              className="input-field"
+            />
+            <button
+              onClick={uploadAccessAndMigrate}
+              disabled={uploadingAccess || !accessFile}
+              className="btn-primary text-sm disabled:opacity-50"
+            >
+              {uploadingAccess ? 'Subiendo...' : 'Subir y Migrar'}
+            </button>
+          </div>
+
+          <div className="rounded-xl p-4 bg-gray-100/80 dark:bg-white/5 text-sm space-y-2">
+            <div className="text-xs text-gray-500 dark:text-gray-400">Límite máximo: 500 MB</div>
+
+            <div>
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="text-gray-500">Progreso</span>
+                <span className="font-semibold text-gray-900 dark:text-white">{progressPercent}%</span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-gray-200 dark:bg-white/10 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-cyan-400 to-blue-500 transition-all duration-500"
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+              <div className="text-xs mt-1 text-gray-600 dark:text-gray-300">
+                Etapa: <span className="font-medium">{stageLabel}</span>
+                {progress?.totalRows ? ` | ${progress.insertedRows || 0}/${progress.totalRows} registros` : ''}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <span className="text-gray-500">En curso:</span>
+              <span className="font-medium text-gray-900 dark:text-white">
+                {migrationState.current ? `${migrationState.current.fileName} (${migrationState.current.status})` : 'Ninguna'}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <span className="text-gray-500">Última ejecución:</span>
+              <span className="font-medium text-gray-900 dark:text-white">
+                {migrationState.last ? `${migrationState.last.fileName} (${migrationState.last.status})` : 'Sin ejecuciones'}
+              </span>
+            </div>
+
+            {migrationState.last?.finishedAt && (
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                Finalizado: {new Date(migrationState.last.finishedAt).toLocaleString('es-EC')}
+              </div>
+            )}
+
+            {migrationState.last?.error && (
+              <div className="text-xs text-red-500">
+                Error: {migrationState.last.error}
+              </div>
+            )}
+
+            {currentOrLastMigration?.output && (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-cyan-500">Ver log de migración</summary>
+                <pre className="mt-2 max-h-40 overflow-auto text-[11px] p-2 rounded bg-gray-200/70 dark:bg-black/30 text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
+                  {currentOrLastMigration.output}
+                </pre>
+              </details>
+            )}
           </div>
         </Section>
       )}
