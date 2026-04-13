@@ -2,10 +2,21 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
-const { registrarAuditoria } = require('../utils/auditoria');
+const { registrarAuditoria, registrarAuditoriaCheque } = require('../utils/auditoria');
 const { validateBody } = require('../utils/validators');
 const { crearOrdenSchema, editarOrdenSchema } = require('../utils/validators');
 const { asyncHandler } = require('../middleware/common');
+
+// GET /api/ordenes-pago/cuentas-bancarias
+router.get('/cuentas-bancarias', authMiddleware, asyncHandler(async (req, res) => {
+  const result = await pool.query(
+    `SELECT id, codigo_banco, nombre_banco, cuenta_bancaria, descripcion_cuenta, descripcion_banco, siguiente_numero_cheque 
+     FROM financiero.cuentas_bancarias 
+     WHERE activo = true 
+     ORDER BY cuenta_bancaria, codigo_banco`
+  );
+  res.json({ success: true, data: result.rows });
+}));
 
 // GET /api/ordenes-pago - listar con paginación y filtros
 router.get('/', authMiddleware, asyncHandler(async (req, res) => {
@@ -164,25 +175,65 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       valor_planilla, porcentaje_iva, valor_iva,
       otros_cargos = [],
       retenciones = [],
-      cuenta_banco_central, codigo_inst_financiera,
+      cuenta_banco_central, codigo_banco, cheque_numero, codigo_inst_financiera,
       tipo_cuenta_beneficiario, cuenta_beneficiario,
     } = req.body;
 
+    const isAdmin = req.user?.rol === 'admin';
     // Obtener siguiente número
     const numResult = await client.query(
       "SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_orden' FOR UPDATE"
     );
     const numOrden = parseInt(numResult.rows[0].valor);
 
-    const numChequeResult = await client.query(
-      "SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_cheque' FOR UPDATE"
-    );
-    const numCheque = parseInt(numChequeResult.rows[0].valor);
 
+    // Obtener siguiente cheque de la cuenta bancaria específica
+    let numCheque = null;
+    let codigoBancoToUse = codigo_banco || null;
+    if (codigoBancoToUse) {
+      const cuentaBancResult = await client.query(
+        `SELECT siguiente_numero_cheque, nombre_banco FROM financiero.cuentas_bancarias 
+         WHERE codigo_banco = $1 FOR UPDATE`,
+        [codigoBancoToUse]
+      );
+      if (cuentaBancResult.rows.length > 0) {
+        numCheque = parseInt(cuentaBancResult.rows[0].siguiente_numero_cheque);
+      }
+    }
+    // Fallback a global si no hay cuenta específica (retrocompatibilidad)
+    if (!numCheque) {
+      const numChequeResult = await client.query(
+        "SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_cheque' FOR UPDATE"
+      );
+      numCheque = parseInt(numChequeResult.rows[0]?.valor) || 1;
+    }
+
+    // Solo admin puede forzar un numero de cheque manual.
+    const suggestedChequeNum = String(numCheque);
+    const requestedChequeNum = cheque_numero ? String(cheque_numero).trim() : '';
+    const isManualChequeOverride = isAdmin && requestedChequeNum && requestedChequeNum !== suggestedChequeNum;
+    const finalChequeNum = isManualChequeOverride ? requestedChequeNum : suggestedChequeNum;
     // Obtener config
     const ivaConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'iva_porcentaje'");
     const cuentaBCConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'cuenta_banco_central'");
     const codBancoConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'codigo_banco'");
+    const finalCodigoBanco = codigoBancoToUse || codBancoConfig.rows[0]?.valor || null;
+
+    if (finalCodigoBanco && finalChequeNum && finalChequeNum !== '0') {
+      const chequeDuplicado = await client.query(
+        `SELECT id FROM financiero.ordenes_pago
+         WHERE codigo_banco = $1 AND cheque_numero = $2
+         LIMIT 1`,
+        [finalCodigoBanco, finalChequeNum]
+      );
+      if (chequeDuplicado.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          error: `El cheque ${finalChequeNum} ya existe para el banco ${finalCodigoBanco}`,
+        });
+      }
+    }
 
     const pctIva = porcentaje_iva !== undefined ? parseFloat(porcentaje_iva) : parseFloat(ivaConfig.rows[0]?.valor || '15');
     const valPlanilla = parseFloat(valor_planilla) || 0;
@@ -270,7 +321,7 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
         cargosFields['razon_otros_cargos_4'] || null, cargosFields['valor_otros_cargos_4'] || 0,
         cargosFields['razon_otros_cargos_5'] || null, cargosFields['valor_otros_cargos_5'] || 0,
         totalCargos, totalRetenciones, liquidoPagar,
-        codBancoConfig.rows[0]?.valor || null, String(numCheque), liquidoPagar,
+        finalCodigoBanco, finalChequeNum, liquidoPagar,
         req.user.id,
       ]
     );
@@ -291,11 +342,20 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       "UPDATE financiero.configuracion SET valor = $1 WHERE clave = 'siguiente_numero_orden'",
       [String(numOrden + 1)]
     );
-    await client.query(
-      "UPDATE financiero.configuracion SET valor = $1 WHERE clave = 'siguiente_numero_cheque'",
-      [String(numCheque + 1)]
-    );
 
+    // Incrementar contador de la cuenta bancaria cuando se usa la sugerencia de secuencia.
+    if (codigoBancoToUse && !isManualChequeOverride) {
+      await client.query(
+        `UPDATE financiero.cuentas_bancarias SET siguiente_numero_cheque = $1 WHERE codigo_banco = $2`,
+        [numCheque + 1, codigoBancoToUse]
+      );
+    } else if (!codigoBancoToUse) {
+      // Fallback: incrementar global también (retrocompatibilidad)
+      await client.query(
+        "UPDATE financiero.configuracion SET valor = $1 WHERE clave = 'siguiente_numero_cheque'",
+        [String(numCheque + 1)]
+      );
+    }
     await client.query('COMMIT');
 
     // Auditoría
@@ -309,9 +369,23 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       ip_address: req.ip,
     });
 
+    if (isManualChequeOverride) {
+      await registrarAuditoriaCheque({
+        orden_pago_id: ordenId,
+        accion: 'MANUAL_OVERRIDE_CREAR',
+        codigo_banco: finalCodigoBanco,
+        cheque_anterior: suggestedChequeNum,
+        cheque_nuevo: finalChequeNum,
+        motivo: 'Ajuste manual de emergencia al crear orden',
+        usuario_id: req.user.id,
+        usuario_nombre: req.user.nombre,
+        ip_address: req.ip,
+      });
+    }
+
     res.status(201).json({
       success: true,
-      data: { id: ordenId, numero_orden: numOrden, numero_cheque: numCheque },
+      data: { id: ordenId, numero_orden: numOrden, numero_cheque: finalChequeNum },
     });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -342,7 +416,30 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), valida
       valor_planilla, porcentaje_iva, valor_iva,
       otros_cargos = [],
       retenciones = [],
+      cuenta_banco_central, codigo_banco, cheque_numero,
     } = req.body;
+
+    const isAdmin = req.user?.rol === 'admin';
+    const existingChequeNumero = existing.rows[0].cheque_numero || null;
+    const effectiveChequeNumero = isAdmin ? (cheque_numero || existingChequeNumero) : existingChequeNumero;
+    const effectiveCodigoBanco = codigo_banco || existing.rows[0].codigo_banco;
+    const isManualChequeEdit = isAdmin && cheque_numero && String(cheque_numero).trim() !== String(existingChequeNumero || '').trim();
+
+    if (isAdmin && (cheque_numero || codigo_banco) && effectiveCodigoBanco && effectiveChequeNumero && effectiveChequeNumero !== '0') {
+      const chequeDuplicado = await client.query(
+        `SELECT id FROM financiero.ordenes_pago
+         WHERE codigo_banco = $1 AND cheque_numero = $2 AND id <> $3
+         LIMIT 1`,
+        [effectiveCodigoBanco, effectiveChequeNumero, req.params.id]
+      );
+      if (chequeDuplicado.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          error: `El cheque ${effectiveChequeNumero} ya existe para el banco ${effectiveCodigoBanco}`,
+        });
+      }
+    }
 
     const valPlanilla = parseFloat(valor_planilla) || 0;
     const pctIva = parseFloat(porcentaje_iva) || 0;
@@ -378,6 +475,9 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), valida
         razon_otros_cargos_5 = $17, valor_otros_cargos_5 = $18,
         total_cargos = $19, total_retenciones = $20, liquido_pagar = $21,
         valor_cheque = $22,
+        codigo_banco = COALESCE($25, codigo_banco),
+        cheque_numero = COALESCE($26, cheque_numero),
+        cuenta_banco_central = COALESCE($27, cuenta_banco_central),
         usuario_modificacion = $23, updated_at = NOW()
       WHERE id = $24`,
       [
@@ -392,6 +492,7 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), valida
         totalCargos, totalRetenciones, liquidoPagar,
         liquidoPagar,
         req.user.id, req.params.id,
+        codigo_banco || null, effectiveChequeNumero, cuenta_banco_central || null,
       ]
     );
 
@@ -417,6 +518,20 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), valida
       usuario_nombre: req.user.nombre,
       ip_address: req.ip,
     });
+
+    if (isManualChequeEdit) {
+      await registrarAuditoriaCheque({
+        orden_pago_id: parseInt(req.params.id),
+        accion: 'MANUAL_OVERRIDE_EDITAR',
+        codigo_banco: effectiveCodigoBanco,
+        cheque_anterior: existingChequeNumero,
+        cheque_nuevo: effectiveChequeNumero,
+        motivo: 'Ajuste manual de emergencia en edicion',
+        usuario_id: req.user.id,
+        usuario_nombre: req.user.nombre,
+        ip_address: req.ip,
+      });
+    }
 
     res.json({ success: true, message: 'Orden actualizada' });
   } catch (err) {

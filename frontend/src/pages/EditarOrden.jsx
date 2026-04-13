@@ -4,21 +4,29 @@ import { motion } from 'framer-motion';
 import { HiOutlinePlus, HiOutlineTrash, HiOutlineMagnifyingGlass } from 'react-icons/hi2';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import MultiLineDropdown from '../components/MultiLineDropdown';
 
 const formatMoney = (v) => parseFloat(v || 0).toFixed(2);
 
 export default function EditarOrden() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = currentUser?.rol === 'admin';
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [orden, setOrden] = useState(null);
   const [retencionesCatalogo, setRetencionesCatalogo] = useState([]);
 
+  const [cuentasBancarias, setCuentasBancarias] = useState([]);
+  const [cuentaBcSeleccionada, setCuentaBcSeleccionada] = useState('');
+  const [codigoBancoSeleccionado, setCodigoBancoSeleccionado] = useState('');
+  const [numCheque, setNumCheque] = useState('');
   const [codigoBeneficiario, setCodigoBeneficiario] = useState('');
   const [nombreBeneficiario, setNombreBeneficiario] = useState('');
   const [detalle, setDetalle] = useState('');
   const [valorPlanilla, setValorPlanilla] = useState('');
+  const [aplicaIva, setAplicaIva] = useState(true);
   const [porcentajeIva, setPorcentajeIva] = useState('');
   const [valorIva, setValorIva] = useState('');
   const [otrosCargos, setOtrosCargos] = useState([]);
@@ -33,7 +41,8 @@ export default function EditarOrden() {
     Promise.all([
       api.get(`/ordenes-pago/${id}`),
       api.get('/configuracion/retenciones-catalogo'),
-    ]).then(([ordenRes, retRes]) => {
+      api.get('/ordenes-pago/cuentas-bancarias'),
+    ]).then(([ordenRes, retRes, cuentasRes]) => {
       const o = ordenRes.data.data;
       setOrden(o);
       setCodigoBeneficiario(o.codigo_beneficiario || '');
@@ -41,9 +50,16 @@ export default function EditarOrden() {
       setBusqueda(o.nombre_beneficiario || '');
       setDetalle(o.detalle || '');
       setValorPlanilla(String(o.valor_planilla || ''));
-      setPorcentajeIva(String(o.porcentaje_iva || ''));
-      setValorIva(String(o.valor_iva || ''));
+      const pct = parseFloat(o.porcentaje_iva) || 0;
+      const val = parseFloat(o.valor_iva) || 0;
+      setAplicaIva(pct > 0 || val > 0);
+      setPorcentajeIva(String(pct));
+      setValorIva(String(val.toFixed(2)));
       setOtrosCargos(o.otros_cargos?.length ? o.otros_cargos : []);
+      setCuentaBcSeleccionada(o.cuenta_banco_central || '');
+      setCodigoBancoSeleccionado(o.codigo_banco || '');
+      setNumCheque(o.cheque_numero || '');
+      setCuentasBancarias(cuentasRes.data.data || []);
       const retencionesOrden = o.retenciones?.length ? o.retenciones : [];
       const retencionesDesdeCatalogo = retencionesOrden
         .filter(r => !(r.tipo === 'OTRO' && (parseFloat(r.base_imponible) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0))
@@ -68,10 +84,20 @@ export default function EditarOrden() {
   }, [id, navigate]);
 
   useEffect(() => {
+    if (!aplicaIva) {
+      setValorIva('0.00');
+      return;
+    }
+
     const vp = parseFloat(valorPlanilla) || 0;
     const pct = parseFloat(porcentajeIva) || 0;
     setValorIva((vp * pct / 100).toFixed(2));
-  }, [valorPlanilla, porcentajeIva]);
+  }, [valorPlanilla, porcentajeIva, aplicaIva]);
+
+  const cuentasUnicas = [...new Set(cuentasBancarias.map(c => c.cuenta_bancaria))];
+  const bancosFiltrados = cuentaBcSeleccionada
+    ? cuentasBancarias.filter(c => c.cuenta_bancaria === cuentaBcSeleccionada)
+    : cuentasBancarias;
 
   const buscarBeneficiario = useCallback(async (q) => {
     if (q.length < 2) { setResultados([]); return; }
@@ -142,15 +168,26 @@ export default function EditarOrden() {
   const handleSubmit = async () => {
     if (!nombreBeneficiario.trim()) return toast.error('Ingrese el beneficiario');
     if (!detalle.trim()) return toast.error('Ingrese el detalle');
-    if (vp <= 0) return toast.error('Ingrese el valor');
+    if (totalCargos <= 0) return toast.error('Ingrese al menos un valor en Subtotal u Otros Cargos');
 
     setSaving(true);
     try {
+      const pctIva = aplicaIva ? (parseFloat(porcentajeIva) || 0) : 0;
+      const valIva = aplicaIva ? (parseFloat(valorIva) || 0) : 0;
+
       const retencionesPayload = [
-        ...retenciones.filter(r => r.concepto && parseFloat(r.valor) > 0),
+        ...retenciones
+          .filter(r => r.concepto && parseFloat(r.valor) > 0)
+          .map(r => ({
+            tipo: r.tipo || 'OTRO',
+            concepto: r.concepto,
+            base: parseFloat(r.base) || 0,
+            porcentaje: parseFloat(r.porcentaje) || 0,
+            valor: parseFloat(r.valor) || 0,
+          })),
         ...retencionesManuales
           .filter(r => r.concepto && parseFloat(r.valor) > 0)
-          .map(r => ({ tipo: 'OTRO', concepto: r.concepto, base: 0, porcentaje: 0, valor: r.valor })),
+          .map(r => ({ tipo: 'OTRO', concepto: r.concepto, base: 0, porcentaje: 0, valor: parseFloat(r.valor) || 0 })),
       ];
 
       const body = {
@@ -158,12 +195,27 @@ export default function EditarOrden() {
         nombre_beneficiario: nombreBeneficiario,
         detalle,
         valor_planilla: vp,
-        porcentaje_iva: parseFloat(porcentajeIva) || 0,
-        valor_iva: vi,
-        otros_cargos: otrosCargos.filter(c => c.razon && parseFloat(c.valor) > 0),
+        porcentaje_iva: pctIva,
+        valor_iva: valIva,
+        otros_cargos: otrosCargos
+          .filter(c => c.razon && parseFloat(c.valor) > 0)
+          .map(c => ({
+            razon: c.razon,
+            valor: parseFloat(c.valor) || 0,
+          })),
         retenciones: retencionesPayload,
       };
 
+      // Add bank and check number if selected
+      if (cuentaBcSeleccionada) {
+        body.cuenta_banco_central = cuentaBcSeleccionada;
+      }
+      if (codigoBancoSeleccionado) {
+        body.codigo_banco = codigoBancoSeleccionado;
+      }
+      if (isAdmin && numCheque) {
+        body.cheque_numero = numCheque;
+      }
       await api.put(`/ordenes-pago/${id}`, body);
       toast.success('Orden actualizada');
       navigate('/ordenes-pago');
@@ -192,18 +244,70 @@ export default function EditarOrden() {
       )}
 
       {/* Info bar */}
-      <div className="glass rounded-2xl p-4 flex flex-wrap gap-6">
-        <div>
+      <div className="glass rounded-2xl p-4 flex flex-wrap gap-4">
+        <div className="flex-shrink-0">
           <p className="text-xs text-gray-500 uppercase">N° Orden</p>
           <p className="text-xl font-mono neon-text font-bold">{orden?.numero_orden}</p>
         </div>
-        <div>
-          <p className="text-xs text-gray-500 uppercase">N° Cheque</p>
-          <p className="text-xl font-mono text-purple-400 font-bold">{orden?.numero_cheque || '—'}</p>
-        </div>
-        <div>
+        <div className="flex-shrink-0">
           <p className="text-xs text-gray-500 uppercase">Fecha Creación</p>
           <p className="text-lg text-gray-900 dark:text-white">{orden?.fecha_orden ? new Date(orden.fecha_orden).toLocaleDateString('es-EC') : ''}</p>
+        </div>
+        <div className="flex-1 min-w-[220px]">
+          <MultiLineDropdown
+            label="Cuenta BC"
+            items={cuentasBancarias}
+            value={codigoBancoSeleccionado}
+            onChange={(codigo) => {
+              const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigo);
+              if (cuenta) {
+                setCuentaBcSeleccionada(cuenta.cuenta_bancaria);
+                setCodigoBancoSeleccionado(codigo);
+                setNumCheque(String(cuenta.siguiente_numero_cheque));
+              }
+            }}
+            placeholder="Seleccionar cuenta..."
+            disabled={disabled}
+            getKey={(item) => item.codigo_banco}
+            getDisplay={(item) => [
+              item.descripcion_cuenta || item.cuenta_bancaria,
+              `${item.codigo_banco} - ${item.descripcion_banco || item.nombre_banco}`,
+            ]}
+          />
+        </div>
+        <div className="flex-1 min-w-[220px]">
+          <MultiLineDropdown
+            label="Código Banco"
+            items={bancosFiltrados}
+            value={codigoBancoSeleccionado}
+            onChange={(codigo) => {
+              const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigo);
+              if (cuenta) {
+                setCuentaBcSeleccionada(cuenta.cuenta_bancaria);
+                setCodigoBancoSeleccionado(codigo);
+                setNumCheque(String(cuenta.siguiente_numero_cheque));
+              }
+            }}
+            placeholder="Seleccionar banco..."
+            disabled={disabled}
+            getKey={(item) => item.codigo_banco}
+            getDisplay={(item) => [
+              item.codigo_banco,
+              item.descripcion_banco || item.nombre_banco,
+            ]}
+          />
+        </div>
+        <div className="flex-shrink-0">
+          <p className="text-xs text-gray-500 uppercase">N° Cheque</p>
+          <input
+            type="text"
+            value={numCheque}
+            onChange={(e) => setNumCheque(e.target.value.toUpperCase())}
+            className="input-field font-mono text-purple-400 font-bold w-32"
+            placeholder="—"
+            disabled={disabled || !isAdmin}
+          />
+          {!isAdmin && <p className="mt-1 text-[11px] text-gray-500">Editable solo por administradores</p>}
         </div>
       </div>
 
@@ -244,6 +348,29 @@ export default function EditarOrden() {
       {/* Valores */}
       <div className="glass relative z-10 rounded-2xl p-6 space-y-4">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Valores</h2>
+        <div className="flex items-center justify-between rounded-xl border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 px-3 py-2">
+          <div>
+            <p className="text-sm font-medium text-gray-800 dark:text-gray-100">Aplicar IVA</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Desactívelo cuando la orden no tenga impuesto</p>
+          </div>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              const checked = !aplicaIva;
+              setAplicaIva(checked);
+              if (!checked) {
+                setPorcentajeIva('0');
+                setValorIva('0.00');
+              }
+            }}
+            className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${aplicaIva ? 'bg-cyan-500' : 'bg-gray-300 dark:bg-dark-600'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+            aria-pressed={aplicaIva}
+            aria-label="Aplicar IVA"
+          >
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${aplicaIva ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Valor (Subtotal)</label>
@@ -251,11 +378,11 @@ export default function EditarOrden() {
           </div>
           <div>
             <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">% IVA</label>
-            <input type="number" step="0.01" value={porcentajeIva} onChange={(e) => setPorcentajeIva(e.target.value)} className="input-field" disabled={disabled} />
+            <input type="number" step="0.01" value={porcentajeIva} onChange={(e) => setPorcentajeIva(e.target.value)} className="input-field" disabled={disabled || !aplicaIva} />
           </div>
           <div>
             <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Valor IVA</label>
-            <input type="number" step="0.01" value={valorIva} className="input-field bg-gray-100 dark:bg-dark-600" readOnly />
+            <input type="number" step="0.01" value={valorIva} className="input-field bg-gray-100 dark:bg-dark-600" readOnly disabled={!aplicaIva} />
           </div>
           <div className="flex items-end">
             <div className="w-full p-3 rounded-xl bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20">

@@ -7,6 +7,7 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "init-db": "node src/config/init-db.js",
+    "migrate-add-cuentas-bancarias": "node src/config/migrate-add-cuentas-bancarias.js",
     "migrate-drop-unused-columns": "node src/config/migrate-drop-unused-columns.js",
     "test": "jest",
     "test:watch": "jest --watch",

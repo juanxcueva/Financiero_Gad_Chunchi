@@ -158,9 +158,9 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   ];
 
   const retencionesRows = retenciones.map(r =>
-    `<tr><td style="text-align:left;padding:2px 8px;">${r.concepto}</td>
-     <td style="text-align:right;padding:2px 8px;">${formatMoney(r.porcentaje)}%</td>
-     <td style="text-align:right;padding:2px 8px;">${formatMoney(r.valor)}</td></tr>`
+    `<tr><td style="text-align:left;padding:3px 8px;vertical-align:top;">${r.concepto}</td>
+     <td style="text-align:right;padding:3px 8px;vertical-align:top;white-space:nowrap;">${formatMoney(r.porcentaje)}%</td>
+     <td style="text-align:right;padding:3px 8px;vertical-align:top;white-space:nowrap;">${formatMoney(r.valor)}</td></tr>`
   ).join('');
 
   const preferredCols = getPreferredSignatureColumns(allFirmantes.length);
@@ -214,26 +214,30 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   .header .num { font-size: 22px; font-weight: bold; color: #c00; }
   .info-row { display: flex; justify-content: space-between; margin: 3px 0; }
   .info-row span { font-size: 11px; }
-  .detail-box { border: 1px solid #ccc; padding: 10px; margin: 10px 0; min-height: 120px; text-align: justify; font-size: 10.5px; }
+  .detail-box { border: 1px solid #ccc; padding: 10px; margin: 10px 0 8px; min-height: 90px; text-align: justify; font-size: 10.5px; }
   table.valores { border-collapse: collapse; margin: 8px 0; font-size: 11px; }
   table.valores td { padding: 3px 10px; }
   table.valores .label { font-weight: bold; text-align: right; }
   table.valores .val { text-align: right; min-width: 80px; }
   .ret-table { border-collapse: collapse; font-size: 10.5px; }
   .ret-table td { padding: 2px 6px; }
-  .summary { margin: 15px 0; padding: 10px; background: #f9f9f9; border: 1px solid #ddd; }
+  .summary { margin: 12px 0; padding: 10px 12px; background: #f9f9f9; border: 1px solid #ddd; }
   .summary .total-line { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
   .summary .total-line.big { font-size: 14px; font-weight: bold; border-top: 2px solid #000; padding-top: 8px; margin-top: 5px; }
-  .letras { font-size: 12px; font-weight: bold; margin: 5px 0; }
-  .cheque-info { font-size: 10px; margin: 5px 0; color: #555; }
-  .firmas-wrapper { margin-top: 30px; }
+  .letras { font-size: 12px; font-weight: bold; margin: 6px 0 4px; }
+  .cheque-info { font-size: 10px; margin: 5px 0 6px; color: #555; }
+  .firmas-wrapper { margin-top: 18px; }
   .firmas { width: 100%; border-collapse: collapse; page-break-inside: auto; break-inside: auto; }
   .firmas tr { page-break-inside: avoid; break-inside: avoid-page; }
   .firmas td { text-align: center; padding: 5px; border: none; }
-  .firma-box { padding-top: 50px; vertical-align: bottom; page-break-inside: avoid; break-inside: avoid; min-height: 92px; }
-  .firma-linea { border-top: 1px solid #000; padding-top: 4px; margin-bottom: 20px; min-height: 15px; }
+  .firma-box { padding-top: 28px; vertical-align: bottom; page-break-inside: avoid; break-inside: avoid; min-height: 78px; }
+  .firma-linea { border-top: 1px solid #000; padding-top: 4px; margin-bottom: 14px; min-height: 15px; }
   .firma-nombre { font-size: 11px; }
   .firma-cargo { font-weight: bold; font-size: 11px; margin-bottom: 2px; }
+  .firmas-grid { margin-top: 8px; }
+  .firmas-compact { width: 100%; border-collapse: separate; border-spacing: 10px 8px; }
+  .firmas-compact td { width: 25%; vertical-align: top; }
+  .firma-card { border-top: 1px solid #000; padding-top: 6px; min-height: 64px; }
 </style>
 </head>
 <body>
@@ -286,7 +290,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   </div>
 
   <div class="firmas-wrapper">
-    <table class="firmas">
+    <table class="firmas-compact">
       ${firmantesRowsHtml}
     </table>
   </div>
@@ -466,30 +470,66 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     children.push(new Paragraph({ children: [] }));
 
     // Summary
-    children.push(new Paragraph({ children: [
-      new TextRun({ text: 'Cargos: ', bold: true, size: 22 }),
-      new TextRun({ text: formatMoney(orden.total_cargos), size: 22 }),
-      new TextRun({ text: '    Retenciones: ', bold: true, size: 22 }),
-      new TextRun({ text: formatMoney(orden.total_retenciones), size: 22 }),
-    ] }));
+    const summaryTable = new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({
+          children: [
+            new TableCell({ borders: noBorders, children: [new Paragraph({ children: [new TextRun({ text: 'Cargos', bold: true, size: 20 })] })] }),
+            new TableCell({ borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: formatMoney(orden.total_cargos), size: 20 })] })] }),
+          ],
+        }),
+        new TableRow({
+          children: [
+            new TableCell({ borders: noBorders, children: [new Paragraph({ children: [new TextRun({ text: 'Retenciones', bold: true, size: 20 })] })] }),
+            new TableCell({ borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: formatMoney(orden.total_retenciones), size: 20 })] })] }),
+          ],
+        }),
+      ],
+    });
+
+    const liquidSummary = new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({
+          children: [
+            new TableCell({
+              borders: {
+                top: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+                bottom: noBorder,
+                left: noBorder,
+                right: noBorder,
+              },
+              children: [new Paragraph({ children: [new TextRun({ text: 'Líquido a Pagarse', bold: true, size: 24 })] })],
+            }),
+            new TableCell({
+              borders: {
+                top: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+                bottom: noBorder,
+                left: noBorder,
+                right: noBorder,
+              },
+              children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: `$${formatMoney(orden.liquido_pagar)}`, bold: true, size: 24 })] })],
+            }),
+          ],
+        }),
+      ],
+    });
+
+    children.push(summaryTable);
     children.push(new Paragraph({ children: [] }));
-    children.push(new Paragraph({ children: [
-      new TextRun({ text: `Líquido a Pagarse:  $${formatMoney(orden.liquido_pagar)}`, bold: true, size: 26 }),
-    ] }));
+    children.push(liquidSummary);
     children.push(new Paragraph({ children: [
       new TextRun({ text: numeroALetras(parseFloat(orden.liquido_pagar) || 0), bold: true, size: 22 }),
     ] }));
-    children.push(new Paragraph({ children: [] }));
+    children.push(new Paragraph({ spacing: { after: 120 }, children: [] }));
 
     // Cheque info
     children.push(new Paragraph({ children: [
       new TextRun({ text: `Cheque Nº ${orden.cheque_numero || ''}  Banco: ${config.banco_nombre || ''}  ${orden.codigo_banco || ''}`, size: 18, color: '666666' }),
     ] }));
 
-    // Signatures
-    children.push(new Paragraph({ children: [] }));
-    children.push(new Paragraph({ children: [] }));
-    children.push(new Paragraph({ children: [] }));
+    // Signatures follow immediately after the cheque info to avoid wasted blank space
     const allFirmantesWord = [
       { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '' },
       ...firmResult.rows,
@@ -502,9 +542,9 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       borders: noBorders,
       width: { size: Math.floor(100 / maxCols), type: WidthType.PERCENTAGE },
       children: [
-        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '________________________', size: 18 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: nombre, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 20 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 35 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 0 }, children: [new TextRun({ text: nombre, size: 18 })] }),
       ],
     });
 

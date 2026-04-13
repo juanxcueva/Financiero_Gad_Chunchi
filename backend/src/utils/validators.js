@@ -49,6 +49,8 @@ const crearOrdenSchema = z.object({
     })
   ).max(10).optional(),
   cuenta_banco_central: z.string().max(20).optional(),
+  codigo_banco: z.string().max(20).optional(),
+  cheque_numero: z.string().max(20).optional(),
   codigo_inst_financiera: z.string().max(20).optional(),
   tipo_cuenta_beneficiario: z.string().max(5).optional(),
   cuenta_beneficiario: z.string().max(50).optional(),
@@ -97,13 +99,14 @@ function validateBody(schema) {
       next();
     } catch (err) {
       // Formato de error Zod
-      const errors = err.errors.map(e => ({
+      const issues = err?.issues || err?.errors || [];
+      const errors = issues.map(e => ({
         field: e.path.join('.'),
         message: e.message,
       }));
       res.status(400).json({
         success: false,
-        error: 'Datos inválidos',
+        error: 'Datos invalidos',
         details: errors,
       });
     }
@@ -117,13 +120,14 @@ function validateQuery(schema) {
       req.validatedQuery = validated;
       next();
     } catch (err) {
-      const errors = err.errors.map(e => ({
+      const issues = err?.issues || err?.errors || [];
+      const errors = issues.map(e => ({
         field: e.path.join('.'),
         message: e.message,
       }));
       res.status(400).json({
         success: false,
-        error: 'Parámetros inválidos',
+        error: 'Parametros invalidos',
         details: errors,
       });
     }

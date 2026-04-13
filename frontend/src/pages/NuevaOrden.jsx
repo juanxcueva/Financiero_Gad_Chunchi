@@ -1,31 +1,40 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { HiOutlinePlus, HiOutlineTrash, HiOutlineMagnifyingGlass } from 'react-icons/hi2';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import PdfViewer from '../components/PdfViewer';
+import MultiLineDropdown from '../components/MultiLineDropdown';
 
 const formatMoney = (v) => parseFloat(v || 0).toFixed(2);
 
 export default function NuevaOrden() {
   const navigate = useNavigate();
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = currentUser?.rol === 'admin';
   const [loading, setLoading] = useState(false);
   const [numOrden, setNumOrden] = useState('');
   const [numCheque, setNumCheque] = useState('');
   const [config, setConfig] = useState({});
   const [retencionesCatalogo, setRetencionesCatalogo] = useState([]);
 
+  const [cuentasBancarias, setCuentasBancarias] = useState([]);
+  const [cuentaBcSeleccionada, setCuentaBcSeleccionada] = useState('');
+  const [codigoBancoSeleccionado, setCodigoBancoSeleccionado] = useState('');
   // PDF Viewer
   const [showPdfViewer, setShowPdfViewer] = useState(false);
   const [pdfUrl, setPdfUrl] = useState('');
   const [pdfNumOrden, setPdfNumOrden] = useState('');
+  const [generandoDoc, setGenerandoDoc] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(null);
 
   // Form state
   const [codigoBeneficiario, setCodigoBeneficiario] = useState('');
   const [nombreBeneficiario, setNombreBeneficiario] = useState('');
   const [detalle, setDetalle] = useState('');
   const [valorPlanilla, setValorPlanilla] = useState('');
+  const [aplicaIva, setAplicaIva] = useState(true);
   const [porcentajeIva, setPorcentajeIva] = useState('');
   const [valorIva, setValorIva] = useState('');
   const [otrosCargos, setOtrosCargos] = useState([]);
@@ -42,21 +51,52 @@ export default function NuevaOrden() {
       api.get('/ordenes-pago/siguiente-numero'),
       api.get('/configuracion'),
       api.get('/configuracion/retenciones-catalogo'),
-    ]).then(([numRes, configRes, retRes]) => {
+      api.get('/ordenes-pago/cuentas-bancarias'),
+    ]).then(([numRes, configRes, retRes, cuentasRes]) => {
       setNumOrden(numRes.data.data.numero_orden);
       setNumCheque(numRes.data.data.numero_cheque);
       setConfig(configRes.data.data);
-      setPorcentajeIva(configRes.data.data.iva_porcentaje || '15');
+      const defaultPct = String(configRes.data.data.iva_porcentaje || '15');
+      setPorcentajeIva(defaultPct);
+      setAplicaIva((parseFloat(defaultPct) || 0) > 0);
       setRetencionesCatalogo(retRes.data.data);
+      const cuentas = cuentasRes.data.data || [];
+      setCuentasBancarias(cuentas);
+      if (cuentas.length > 0) {
+        const firstAccount = cuentas[0].cuenta_bancaria;
+        const firstBank = cuentas.find(c => c.cuenta_bancaria === firstAccount) || cuentas[0];
+        setCuentaBcSeleccionada(firstBank.cuenta_bancaria);
+        setCodigoBancoSeleccionado(firstBank.codigo_banco);
+        setNumCheque(String(firstBank.siguiente_numero_cheque));
+      }
     }).catch(() => toast.error('Error cargando configuración'));
   }, []);
 
+  // Cuando cambia el banco, actualizar el cheque sugerido
+  useEffect(() => {
+    if (codigoBancoSeleccionado) {
+      const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigoBancoSeleccionado);
+      if (cuenta) {
+        setNumCheque(String(cuenta.siguiente_numero_cheque));
+      }
+    }
+  }, [codigoBancoSeleccionado, cuentasBancarias]);
+
+  const cuentasUnicas = [...new Set(cuentasBancarias.map(c => c.cuenta_bancaria))];
+  const bancosFiltrados = cuentaBcSeleccionada
+    ? cuentasBancarias.filter(c => c.cuenta_bancaria === cuentaBcSeleccionada)
+    : cuentasBancarias;
   // Auto-calculate IVA
   useEffect(() => {
+    if (!aplicaIva) {
+      setValorIva('0.00');
+      return;
+    }
+
     const vp = parseFloat(valorPlanilla) || 0;
     const pct = parseFloat(porcentajeIva) || 0;
     setValorIva((vp * pct / 100).toFixed(2));
-  }, [valorPlanilla, porcentajeIva]);
+  }, [valorPlanilla, porcentajeIva, aplicaIva]);
 
   // Search beneficiarios
   const buscarBeneficiario = useCallback(async (q) => {
@@ -134,18 +174,50 @@ export default function NuevaOrden() {
   const totalRetenciones = totalRetencionesCatalogo + totalRetencionesManuales;
   const liquidoPagar = totalCargos - totalRetenciones;
 
+  const updateProgress = (progressEvent) => {
+    setDownloadProgress((prev) => {
+      const loaded = progressEvent?.loaded || 0;
+      const total = progressEvent?.total || 0;
+      if (total > 0) {
+        const percent = Math.min(100, Math.round((loaded / total) * 100));
+        return { percent, knownTotal: true };
+      }
+
+      const base = prev?.percent || 10;
+      return { percent: Math.min(90, base + 5), knownTotal: false };
+    });
+  };
+
+  const getProgressStage = (percent) => {
+    if (percent >= 100) return 'Documento listo';
+    if (percent >= 75) return 'Transfiriendo archivo';
+    if (percent >= 35) return 'Generando comprobante';
+    return 'Preparando solicitud';
+  };
+
   const handleSubmit = async (generarPdf = false) => {
     if (!nombreBeneficiario.trim()) return toast.error('Ingrese el beneficiario');
     if (!detalle.trim()) return toast.error('Ingrese el detalle');
-    if (vp <= 0) return toast.error('Ingrese el valor');
+    if (totalCargos <= 0) return toast.error('Ingrese al menos un valor en Subtotal u Otros Cargos');
 
     setLoading(true);
     try {
+      const pctIva = aplicaIva ? (parseFloat(porcentajeIva) || 0) : 0;
+      const valIva = aplicaIva ? (parseFloat(valorIva) || 0) : 0;
+
       const retencionesPayload = [
-        ...retenciones.filter(r => r.concepto && parseFloat(r.valor) > 0),
+        ...retenciones
+          .filter(r => r.concepto && parseFloat(r.valor) > 0)
+          .map(r => ({
+            tipo: r.tipo || 'OTRO',
+            concepto: r.concepto,
+            base: parseFloat(r.base) || 0,
+            porcentaje: parseFloat(r.porcentaje) || 0,
+            valor: parseFloat(r.valor) || 0,
+          })),
         ...retencionesManuales
           .filter(r => r.concepto && parseFloat(r.valor) > 0)
-          .map(r => ({ tipo: 'OTRO', concepto: r.concepto, base: 0, porcentaje: 0, valor: r.valor })),
+          .map(r => ({ tipo: 'OTRO', concepto: r.concepto, base: 0, porcentaje: 0, valor: parseFloat(r.valor) || 0 })),
       ];
 
       const body = {
@@ -153,28 +225,52 @@ export default function NuevaOrden() {
         nombre_beneficiario: nombreBeneficiario,
         detalle,
         valor_planilla: vp,
-        porcentaje_iva: parseFloat(porcentajeIva) || 0,
-        valor_iva: vi,
-        otros_cargos: otrosCargos.filter(c => c.razon && parseFloat(c.valor) > 0),
+        porcentaje_iva: pctIva,
+        valor_iva: valIva,
+        otros_cargos: otrosCargos
+          .filter(c => c.razon && parseFloat(c.valor) > 0)
+          .map(c => ({
+            razon: c.razon,
+            valor: parseFloat(c.valor) || 0,
+          })),
         retenciones: retencionesPayload,
       };
 
+      // Add bank and check number if selected
+      if (cuentaBcSeleccionada) {
+        body.cuenta_banco_central = cuentaBcSeleccionada;
+      }
+      if (codigoBancoSeleccionado) {
+        body.codigo_banco = codigoBancoSeleccionado;
+      }
+      if (isAdmin && numCheque) {
+        body.cheque_numero = numCheque;
+      }
       const { data } = await api.post('/ordenes-pago', body);
       toast.success(`Orden N° ${data.data.numero_orden} creada`);
 
       if (generarPdf) {
-        // Fetch PDF with authentication and create blob URL
+        setGenerandoDoc({ tipo: 'pdf' });
+        setDownloadProgress({ percent: 10, knownTotal: false });
+
         try {
           const pdfResponse = await api.get(`/documentos/${data.data.id}/pdf`, {
-            responseType: 'blob'
+            responseType: 'blob',
+            onDownloadProgress: updateProgress,
           });
+
+          setDownloadProgress({ percent: 100, knownTotal: true });
           const blobUrl = URL.createObjectURL(pdfResponse.data);
           setPdfUrl(blobUrl);
           setPdfNumOrden(data.data.numero_orden);
           setShowPdfViewer(true);
         } catch (pdfErr) {
-          toast.error('Error al generar PDF');
-          console.error(pdfErr);
+          toast.error(pdfErr?.response?.data?.error || 'Error al generar PDF');
+        } finally {
+          setTimeout(() => {
+            setGenerandoDoc(null);
+            setDownloadProgress(null);
+          }, 250);
         }
       } else {
         navigate('/ordenes-pago');
@@ -194,22 +290,74 @@ export default function NuevaOrden() {
       </motion.div>
 
       {/* Info bar */}
-      <div className="glass rounded-2xl p-4 flex flex-wrap gap-6">
-        <div>
+      <div className="glass rounded-2xl p-4 flex flex-wrap gap-4">
+        <div className="flex-shrink-0">
           <p className="text-xs text-gray-500 uppercase tracking-wider">N° Orden</p>
           <p className="text-xl font-mono neon-text font-bold">{numOrden}</p>
         </div>
-        <div>
-          <p className="text-xs text-gray-500 uppercase tracking-wider">N° Cheque</p>
-          <p className="text-xl font-mono text-purple-400 font-bold">{numCheque}</p>
-        </div>
-        <div>
+        <div className="flex-shrink-0">
           <p className="text-xs text-gray-500 uppercase tracking-wider">Fecha</p>
           <p className="text-lg text-gray-900 dark:text-white">{new Date().toLocaleDateString('es-EC')}</p>
         </div>
-        <div>
+        <div className="flex-shrink-0">
           <p className="text-xs text-gray-500 uppercase tracking-wider">IVA Vigente</p>
           <p className="text-lg text-gray-900 dark:text-white">{porcentajeIva}%</p>
+        </div>
+        <div className="flex-1 min-w-[220px]">
+          <MultiLineDropdown
+            label="Cuenta BC"
+            items={cuentasBancarias}
+            value={codigoBancoSeleccionado}
+            onChange={(codigo) => {
+              const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigo);
+              if (cuenta) {
+                setCuentaBcSeleccionada(cuenta.cuenta_bancaria);
+                setCodigoBancoSeleccionado(codigo);
+                setNumCheque(String(cuenta.siguiente_numero_cheque));
+              }
+            }}
+            placeholder="Seleccionar cuenta..."
+            disabled={false}
+            getKey={(item) => item.codigo_banco}
+            getDisplay={(item) => [
+              item.descripcion_cuenta || item.cuenta_bancaria,
+              `${item.codigo_banco} - ${item.descripcion_banco || item.nombre_banco}`,
+            ]}
+          />
+        </div>
+        <div className="flex-1 min-w-[220px]">
+          <MultiLineDropdown
+            label="Código Banco"
+            items={bancosFiltrados}
+            value={codigoBancoSeleccionado}
+            onChange={(codigo) => {
+              const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigo);
+              if (cuenta) {
+                setCuentaBcSeleccionada(cuenta.cuenta_bancaria);
+                setCodigoBancoSeleccionado(codigo);
+                setNumCheque(String(cuenta.siguiente_numero_cheque));
+              }
+            }}
+            placeholder="Seleccionar banco..."
+            disabled={false}
+            getKey={(item) => item.codigo_banco}
+            getDisplay={(item) => [
+              item.codigo_banco,
+              item.descripcion_banco || item.nombre_banco,
+            ]}
+          />
+        </div>
+        <div className="flex-shrink-0">
+          <p className="text-xs text-gray-500 uppercase tracking-wider">N° Cheque</p>
+          <input
+            type="text"
+            value={numCheque}
+            onChange={(e) => setNumCheque(e.target.value.toUpperCase())}
+            className="input-field font-mono text-purple-400 font-bold w-32"
+            placeholder="Auto"
+            disabled={!isAdmin}
+          />
+          {!isAdmin && <p className="mt-1 text-[11px] text-gray-500">Editable solo por administradores</p>}
         </div>
       </div>
 
@@ -281,6 +429,35 @@ export default function NuevaOrden() {
           <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-green-400 to-emerald-500 flex items-center justify-center text-dark-900 text-sm font-bold">3</span>
           Valores
         </h2>
+        <div className="flex items-center justify-between rounded-xl border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 px-3 py-2">
+          <div>
+            <p className="text-sm font-medium text-gray-800 dark:text-gray-100">Aplicar IVA</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Desactívelo para vacaciones, atrasos u órdenes sin impuesto</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const checked = !aplicaIva;
+              setAplicaIva(checked);
+              if (!checked) {
+                setPorcentajeIva('0');
+                setValorIva('0.00');
+                return;
+              }
+
+              if ((parseFloat(porcentajeIva) || 0) <= 0) {
+                setPorcentajeIva(String(config?.iva_porcentaje || '15'));
+              }
+            }}
+            className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${aplicaIva ? 'bg-cyan-500' : 'bg-gray-300 dark:bg-dark-600'}`}
+            aria-pressed={aplicaIva}
+            aria-label="Aplicar IVA"
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${aplicaIva ? 'translate-x-6' : 'translate-x-1'}`}
+            />
+          </button>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Valor (Subtotal)</label>
@@ -288,11 +465,11 @@ export default function NuevaOrden() {
           </div>
           <div>
             <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">% IVA</label>
-            <input type="number" step="0.01" value={porcentajeIva} onChange={(e) => setPorcentajeIva(e.target.value)} className="input-field" placeholder="15" />
+            <input type="number" step="0.01" value={porcentajeIva} onChange={(e) => setPorcentajeIva(e.target.value)} className="input-field" placeholder="15" disabled={!aplicaIva} />
           </div>
           <div>
             <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Valor IVA</label>
-            <input type="number" step="0.01" value={valorIva} onChange={(e) => setValorIva(e.target.value)} className="input-field bg-gray-100 dark:bg-dark-600" />
+            <input type="number" step="0.01" value={valorIva} onChange={(e) => setValorIva(e.target.value)} className="input-field bg-gray-100 dark:bg-dark-600" disabled={!aplicaIva} />
           </div>
           <div className="flex items-end">
             <div className="w-full p-3 rounded-xl bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20">
@@ -437,6 +614,66 @@ export default function NuevaOrden() {
           }}
         />
       )}
+
+      <AnimatePresence>
+        {generandoDoc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
+          >
+            <div className="glass rounded-2xl p-5 w-[390px] max-w-[92vw] border border-cyan-300/30 dark:border-cyan-400/20">
+              <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">Generando PDF</p>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+                {downloadProgress?.knownTotal ? 'Descargando documento...' : 'Preparando documento en el servidor...'}
+              </p>
+              <div className="w-full h-3 rounded-full bg-gray-200/70 dark:bg-white/10 overflow-hidden relative">
+                <motion.div
+                  className="h-full bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${downloadProgress?.percent || 10}%` }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
+                />
+                <motion.div
+                  className="absolute top-0 bottom-0 w-10 bg-white/35 blur-[2px]"
+                  initial={{ x: -50 }}
+                  animate={{ x: 360 }}
+                  transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {downloadProgress?.knownTotal ? 'Progreso real' : 'Estimado'}
+                </p>
+                <p className="text-xs font-semibold text-cyan-400">{downloadProgress?.percent || 10}%</p>
+              </div>
+
+              <div className="mt-3 rounded-xl bg-white/60 dark:bg-dark-700/60 border border-gray-200 dark:border-white/10 px-3 py-2">
+                <p className="text-xs text-gray-700 dark:text-gray-300 font-medium">
+                  {getProgressStage(downloadProgress?.percent || 10)}
+                </p>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+                  {[
+                    { label: 'Solicitud', doneAt: 25 },
+                    { label: 'Generación', doneAt: 70 },
+                    { label: 'Descarga', doneAt: 100 },
+                  ].map((step) => {
+                    const currentPercent = downloadProgress?.percent || 10;
+                    const done = currentPercent >= step.doneAt;
+                    return (
+                      <div key={step.label} className={`rounded-lg border px-2 py-1 text-center ${done ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-700 dark:text-cyan-300' : 'border-gray-300 dark:border-white/10 text-gray-500 dark:text-gray-400'}`}>
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle ${done ? 'bg-cyan-400' : 'bg-gray-400 dark:bg-gray-500'}`} />
+                        {step.label}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
