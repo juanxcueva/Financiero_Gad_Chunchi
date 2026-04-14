@@ -15,7 +15,19 @@ router.get('/cuentas-bancarias', authMiddleware, asyncHandler(async (req, res) =
      WHERE activo = true 
      ORDER BY cuenta_bancaria, codigo_banco`
   );
-  res.json({ success: true, data: result.rows });
+
+  const cuentasBcResult = await pool.query(
+    `SELECT cuenta_bancaria, descripcion_cuenta, siguiente_numero_transfer
+     FROM financiero.cuentas_bc_catalogo
+     WHERE activo = true
+     ORDER BY cuenta_bancaria`
+  );
+
+  res.json({
+    success: true,
+    data: result.rows,
+    cuentas_bc: cuentasBcResult.rows,
+  });
 }));
 
 // GET /api/ordenes-pago - listar con paginación y filtros
@@ -187,20 +199,33 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
     const numOrden = parseInt(numResult.rows[0].valor);
 
 
-    // Obtener siguiente cheque de la cuenta bancaria específica
+    // Obtener siguiente cheque por Cuenta BC (ya no depende de codigo_banco)
+    const ivaConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'iva_porcentaje'");
+    const cuentaBCConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'cuenta_banco_central'");
+    const codBancoConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'codigo_banco'");
+    const chequeEditConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'permitir_editar_cheque'");
+
+    const selectedCuentaBC = cuenta_banco_central || cuentaBCConfig.rows[0]?.valor || null;
+    const finalCodigoBanco = codigo_banco || codBancoConfig.rows[0]?.valor || null;
+    const permitirEditarCheque = ['1', 'true', 'si', 'sí', 'yes'].includes(
+      String(chequeEditConfig.rows[0]?.valor || '').toLowerCase()
+    );
+
     let numCheque = null;
-    let codigoBancoToUse = codigo_banco || null;
-    if (codigoBancoToUse) {
-      const cuentaBancResult = await client.query(
-        `SELECT siguiente_numero_cheque, nombre_banco FROM financiero.cuentas_bancarias 
-         WHERE codigo_banco = $1 FOR UPDATE`,
-        [codigoBancoToUse]
+    if (selectedCuentaBC) {
+      const cuentaBcResult = await client.query(
+        `SELECT siguiente_numero_transfer
+         FROM financiero.cuentas_bc_catalogo
+         WHERE cuenta_bancaria = $1 AND activo = true
+         FOR UPDATE`,
+        [selectedCuentaBC]
       );
-      if (cuentaBancResult.rows.length > 0) {
-        numCheque = parseInt(cuentaBancResult.rows[0].siguiente_numero_cheque);
+      if (cuentaBcResult.rows.length > 0) {
+        numCheque = parseInt(cuentaBcResult.rows[0].siguiente_numero_transfer) || 1;
       }
     }
-    // Fallback a global si no hay cuenta específica (retrocompatibilidad)
+
+    // Fallback global solo si no existe catalogo para la Cuenta BC
     if (!numCheque) {
       const numChequeResult = await client.query(
         "SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_cheque' FOR UPDATE"
@@ -211,26 +236,29 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
     // Solo admin puede forzar un numero de cheque manual.
     const suggestedChequeNum = String(numCheque);
     const requestedChequeNum = cheque_numero ? String(cheque_numero).trim() : '';
-    const isManualChequeOverride = isAdmin && requestedChequeNum && requestedChequeNum !== suggestedChequeNum;
+    const isManualChequeOverride = isAdmin && permitirEditarCheque && requestedChequeNum && requestedChequeNum !== suggestedChequeNum;
     const finalChequeNum = isManualChequeOverride ? requestedChequeNum : suggestedChequeNum;
-    // Obtener config
-    const ivaConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'iva_porcentaje'");
-    const cuentaBCConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'cuenta_banco_central'");
-    const codBancoConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'codigo_banco'");
-    const finalCodigoBanco = codigoBancoToUse || codBancoConfig.rows[0]?.valor || null;
 
-    if (finalCodigoBanco && finalChequeNum && finalChequeNum !== '0') {
+    if (isAdmin && requestedChequeNum && requestedChequeNum !== suggestedChequeNum && !permitirEditarCheque) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        error: 'La edición manual del número de cheque está desactivada en Configuración',
+      });
+    }
+
+    if (selectedCuentaBC && finalChequeNum && finalChequeNum !== '0') {
       const chequeDuplicado = await client.query(
         `SELECT id FROM financiero.ordenes_pago
-         WHERE codigo_banco = $1 AND cheque_numero = $2
+         WHERE cuenta_banco_central = $1 AND cheque_numero = $2
          LIMIT 1`,
-        [finalCodigoBanco, finalChequeNum]
+        [selectedCuentaBC, finalChequeNum]
       );
       if (chequeDuplicado.rows.length > 0) {
         await client.query('ROLLBACK');
         return res.status(409).json({
           success: false,
-          error: `El cheque ${finalChequeNum} ya existe para el banco ${finalCodigoBanco}`,
+          error: `El cheque ${finalChequeNum} ya existe para la Cuenta BC ${selectedCuentaBC}`,
         });
       }
     }
@@ -296,7 +324,7 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
         codigo_banco, cheque_numero, valor_cheque,
         usuario_creacion
       ) VALUES (
-        $1, CURRENT_DATE, 'ACTIVO',
+        $1, COALESCE($32, CURRENT_DATE), 'ACTIVO',
         $2, $3, $4,
         $5, $6, $7, $8,
         $9,
@@ -309,7 +337,7 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       [
         numOrden,
         beneficiarioId, codigo_beneficiario || null, nombre_beneficiario,
-        cuenta_banco_central || cuentaBCConfig.rows[0]?.valor || null,
+        selectedCuentaBC,
         codigo_inst_financiera || null,
         tipo_cuenta_beneficiario || null, cuenta_beneficiario || null,
         detalle,
@@ -323,6 +351,7 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
         totalCargos, totalRetenciones, liquidoPagar,
         finalCodigoBanco, finalChequeNum, liquidoPagar,
         req.user.id,
+        req.body.fecha_orden || null,
       ]
     );
 
@@ -343,14 +372,16 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       [String(numOrden + 1)]
     );
 
-    // Incrementar contador de la cuenta bancaria cuando se usa la sugerencia de secuencia.
-    if (codigoBancoToUse && !isManualChequeOverride) {
+    // Incrementar secuencia por Cuenta BC cuando se usa la sugerencia.
+    if (selectedCuentaBC && !isManualChequeOverride) {
       await client.query(
-        `UPDATE financiero.cuentas_bancarias SET siguiente_numero_cheque = $1 WHERE codigo_banco = $2`,
-        [numCheque + 1, codigoBancoToUse]
+        `UPDATE financiero.cuentas_bc_catalogo
+         SET siguiente_numero_transfer = $1
+         WHERE cuenta_bancaria = $2`,
+        [numCheque + 1, selectedCuentaBC]
       );
-    } else if (!codigoBancoToUse) {
-      // Fallback: incrementar global también (retrocompatibilidad)
+    } else if (!selectedCuentaBC) {
+      // Fallback global solo por retrocompatibilidad
       await client.query(
         "UPDATE financiero.configuracion SET valor = $1 WHERE clave = 'siguiente_numero_cheque'",
         [String(numCheque + 1)]
@@ -421,22 +452,47 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), valida
 
     const isAdmin = req.user?.rol === 'admin';
     const existingChequeNumero = existing.rows[0].cheque_numero || null;
-    const effectiveChequeNumero = isAdmin ? (cheque_numero || existingChequeNumero) : existingChequeNumero;
+    const chequeEditConfig = await client.query(
+      "SELECT valor FROM financiero.configuracion WHERE clave = 'permitir_editar_cheque' LIMIT 1"
+    );
+    const permitirEditarCheque = ['1', 'true', 'si', 'sí', 'yes'].includes(
+      String(chequeEditConfig.rows[0]?.valor || '').toLowerCase()
+    );
+    
+    // Validar que si el cheque cambia y no está permitido, rechazar
+    if (cheque_numero && String(cheque_numero).trim() !== String(existingChequeNumero || '').trim()) {
+      if (!isAdmin) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          error: 'Solo administradores pueden cambiar el número de cheque'
+        });
+      }
+      if (!permitirEditarCheque) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          error: 'Debe activar el control "Permitir editar número de cheque" para cambiar este campo'
+        });
+      }
+    }
+    
+    const effectiveChequeNumero = cheque_numero || existingChequeNumero;
     const effectiveCodigoBanco = codigo_banco || existing.rows[0].codigo_banco;
-    const isManualChequeEdit = isAdmin && cheque_numero && String(cheque_numero).trim() !== String(existingChequeNumero || '').trim();
+    const effectiveCuentaBC = cuenta_banco_central || existing.rows[0].cuenta_banco_central;
 
-    if (isAdmin && (cheque_numero || codigo_banco) && effectiveCodigoBanco && effectiveChequeNumero && effectiveChequeNumero !== '0') {
+    if (isAdmin && (cheque_numero || cuenta_banco_central || codigo_banco) && effectiveCuentaBC && effectiveChequeNumero && effectiveChequeNumero !== '0') {
       const chequeDuplicado = await client.query(
         `SELECT id FROM financiero.ordenes_pago
-         WHERE codigo_banco = $1 AND cheque_numero = $2 AND id <> $3
+         WHERE cuenta_banco_central = $1 AND cheque_numero = $2 AND id <> $3
          LIMIT 1`,
-        [effectiveCodigoBanco, effectiveChequeNumero, req.params.id]
+        [effectiveCuentaBC, effectiveChequeNumero, req.params.id]
       );
       if (chequeDuplicado.rows.length > 0) {
         await client.query('ROLLBACK');
         return res.status(409).json({
           success: false,
-          error: `El cheque ${effectiveChequeNumero} ya existe para el banco ${effectiveCodigoBanco}`,
+          error: `El cheque ${effectiveChequeNumero} ya existe para la Cuenta BC ${effectiveCuentaBC}`,
         });
       }
     }
@@ -496,6 +552,13 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), valida
       ]
     );
 
+    const { fecha_orden: fechaOrdenUpdate } = req.body;
+    if (fechaOrdenUpdate) {
+      await client.query(
+        `UPDATE financiero.ordenes_pago SET fecha = $1, usuario_modificacion = $2, updated_at = NOW() WHERE id = $3`,
+        [fechaOrdenUpdate, req.user.id, req.params.id]
+      );
+    }
     // Reemplazar retenciones
     await client.query('DELETE FROM financiero.ordenes_pago_retenciones WHERE orden_pago_id = $1', [req.params.id]);
     for (const r of retenciones) {

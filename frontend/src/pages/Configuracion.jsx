@@ -17,6 +17,9 @@ function Section({ icon: Icon, title, children }) {
 
 export default function Configuracion() {
   const [config, setConfig] = useState({});
+  const [ivaInput, setIvaInput] = useState('15');
+  const [institucionInput, setInstitucionInput] = useState('');
+  const [permitirEditarCheque, setPermitirEditarCheque] = useState(false);
   const [firmantes, setFirmantes] = useState([]);
   const [retenciones, setRetenciones] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
@@ -41,7 +44,11 @@ export default function Configuracion() {
       }
 
       const [cfgRes, fRes, rRes, uRes] = await Promise.all(requests);
-      setConfig(cfgRes.data.data);
+      const cfg = cfgRes.data.data || {};
+      setConfig(cfg);
+      setIvaInput(String(cfg.iva_porcentaje ?? 15));
+      setInstitucionInput(String(cfg.institucion_nombre || cfg.institucion || ''));
+      setPermitirEditarCheque(['1', 'true', 'si', 'sí', 'yes'].includes(String(cfg.permitir_editar_cheque || '').toLowerCase()));
       setFirmantes(fRes.data.data);
       setRetenciones(rRes.data.data);
       if (uRes?.data?.data) {
@@ -112,6 +119,11 @@ export default function Configuracion() {
       toast.success('Configuración actualizada');
       fetchAll();
     } catch { toast.error('Error al guardar'); }
+  };
+
+  const saveToggleCheque = async (checked) => {
+    setPermitirEditarCheque(checked);
+    await saveConfig('permitir_editar_cheque', checked ? '1' : '0');
   };
 
   // Firmantes CRUD
@@ -263,11 +275,11 @@ export default function Configuracion() {
               <input
                 type="number"
                 step="0.01"
-                defaultValue={config.iva_porcentaje || 15}
-                id="iva_input"
+                value={ivaInput}
+                onChange={(e) => setIvaInput(e.target.value)}
                 className="input-field flex-1"
               />
-              <button onClick={() => saveConfig('iva_porcentaje', document.getElementById('iva_input').value)} className="btn-primary text-sm">Guardar</button>
+              <button onClick={() => saveConfig('iva_porcentaje', ivaInput)} className="btn-primary text-sm">Guardar</button>
             </div>
           </div>
           <div>
@@ -275,11 +287,11 @@ export default function Configuracion() {
             <div className="flex gap-2">
               <input
                 type="text"
-                defaultValue={config.institucion_nombre || config.institucion || ''}
-                id="inst_input"
+                value={institucionInput}
+                onChange={(e) => setInstitucionInput(e.target.value)}
                 className="input-field flex-1"
               />
-              <button onClick={() => saveConfig('institucion_nombre', document.getElementById('inst_input').value)} className="btn-primary text-sm">Guardar</button>
+              <button onClick={() => saveConfig('institucion_nombre', institucionInput)} className="btn-primary text-sm">Guardar</button>
             </div>
           </div>
         </div>
@@ -292,6 +304,21 @@ export default function Configuracion() {
             <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Próximo N° Cheque</label>
             <p className="text-lg font-mono text-purple-400">{config.siguiente_numero_cheque || '—'}</p>
           </div>
+        </div>
+        <div className="mt-4 flex items-center justify-between gap-4 rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 p-4">
+          <div>
+            <p className="text-sm font-medium text-gray-900 dark:text-white">Permitir editar número de cheque</p>
+            <p className="text-xs text-gray-500">Solo para administradores y solo cuando este control esté activo.</p>
+          </div>
+          <label className="inline-flex items-center cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={permitirEditarCheque}
+              onChange={(e) => saveToggleCheque(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="relative w-12 h-7 rounded-full bg-gray-300 peer-checked:bg-cyan-400 transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:h-6 after:w-6 after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-5" />
+          </label>
         </div>
       </Section>
 

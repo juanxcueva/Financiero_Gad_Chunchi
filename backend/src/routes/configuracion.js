@@ -39,17 +39,20 @@ router.put('/', authMiddleware, roleMiddleware('admin'), asyncHandler(async (req
       clave = 'institucion_nombre';
     }
 
-    const updateResult = await pool.query(
-      `UPDATE financiero.configuracion
-       SET valor = $1, updated_at = NOW(), updated_by = $2
-       WHERE clave = $3
-       RETURNING id`,
-      [String(valor), req.user.id, clave]
+    await pool.query(
+      `INSERT INTO financiero.configuracion (clave, valor, descripcion, updated_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (clave)
+       DO UPDATE SET valor = EXCLUDED.valor, updated_at = NOW(), updated_by = EXCLUDED.updated_by`,
+      [
+        clave,
+        String(valor),
+        clave === 'permitir_editar_cheque'
+          ? 'Permitir edición manual del número de cheque desde configuración'
+          : clave,
+        req.user.id,
+      ]
     );
-
-    if (updateResult.rows.length === 0) {
-      return res.status(404).json({ success: false, error: `Clave de configuración no encontrada: ${clave}` });
-    }
   }
   res.json({ success: true, message: 'Configuración actualizada' });
 }));

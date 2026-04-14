@@ -71,6 +71,10 @@ echo "Ejecutando migracion a PostgreSQL"
 DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" \
   "$PYTHON_CMD" "$ROOT_DIR/database/migrar_ordenes_pago.py"
 
+echo "Sincronizando catalogos bancarios desde Access"
+DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" MDB_FILE="$MDB_FILE" \
+  node "$ROOT_DIR/backend/src/config/migrate-add-cuentas-bancarias.js"
+
 echo "Verificacion final"
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "
 SELECT 'ordenes_pago=' || COUNT(*) FROM financiero.ordenes_pago;

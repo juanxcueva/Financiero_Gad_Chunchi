@@ -19,6 +19,7 @@ export default function EditarOrden() {
   const [retencionesCatalogo, setRetencionesCatalogo] = useState([]);
 
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
+  const [cuentasBCCatalogo, setCuentasBCCatalogo] = useState([]);
   const [cuentaBcSeleccionada, setCuentaBcSeleccionada] = useState('');
   const [codigoBancoSeleccionado, setCodigoBancoSeleccionado] = useState('');
   const [numCheque, setNumCheque] = useState('');
@@ -32,6 +33,8 @@ export default function EditarOrden() {
   const [otrosCargos, setOtrosCargos] = useState([]);
   const [retenciones, setRetenciones] = useState([]);
   const [retencionesManuales, setRetencionesManuales] = useState([]);
+  const [permitirEditarCheque, setPermitirEditarCheque] = useState(false);
+  const [fechaOrden, setFechaOrden] = useState('');
 
   const [busqueda, setBusqueda] = useState('');
   const [resultados, setResultados] = useState([]);
@@ -42,7 +45,8 @@ export default function EditarOrden() {
       api.get(`/ordenes-pago/${id}`),
       api.get('/configuracion/retenciones-catalogo'),
       api.get('/ordenes-pago/cuentas-bancarias'),
-    ]).then(([ordenRes, retRes, cuentasRes]) => {
+      api.get('/configuracion'),
+    ]).then(([ordenRes, retRes, cuentasRes, cfgRes]) => {
       const o = ordenRes.data.data;
       setOrden(o);
       setCodigoBeneficiario(o.codigo_beneficiario || '');
@@ -59,7 +63,11 @@ export default function EditarOrden() {
       setCuentaBcSeleccionada(o.cuenta_banco_central || '');
       setCodigoBancoSeleccionado(o.codigo_banco || '');
       setNumCheque(o.cheque_numero || '');
+        setFechaOrden(o.fecha_orden ? o.fecha_orden.split('T')[0] : '');
       setCuentasBancarias(cuentasRes.data.data || []);
+      setCuentasBCCatalogo(cuentasRes.data.cuentas_bc || []);
+      const cfg = cfgRes.data.data || {};
+      setPermitirEditarCheque(['1', 'true', 'si', 'sí', 'yes'].includes(String(cfg.permitir_editar_cheque || '').toLowerCase()));
       const retencionesOrden = o.retenciones?.length ? o.retenciones : [];
       const retencionesDesdeCatalogo = retencionesOrden
         .filter(r => !(r.tipo === 'OTRO' && (parseFloat(r.base_imponible) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0))
@@ -94,10 +102,29 @@ export default function EditarOrden() {
     setValorIva((vp * pct / 100).toFixed(2));
   }, [valorPlanilla, porcentajeIva, aplicaIva]);
 
-  const cuentasUnicas = [...new Set(cuentasBancarias.map(c => c.cuenta_bancaria))];
+  const cuentasCatalogo = cuentasBCCatalogo.length > 0
+    ? cuentasBCCatalogo
+    : [...new Set(cuentasBancarias.map((c) => c.cuenta_bancaria))].map((cuenta) => ({
+      cuenta_bancaria: cuenta,
+      descripcion_cuenta: cuenta,
+    }));
+
   const bancosFiltrados = cuentaBcSeleccionada
     ? cuentasBancarias.filter(c => c.cuenta_bancaria === cuentaBcSeleccionada)
     : cuentasBancarias;
+
+  useEffect(() => {
+    if (bancosFiltrados.length === 0) {
+      setCodigoBancoSeleccionado('');
+      return;
+    }
+
+    const selectedInFilter = bancosFiltrados.some((b) => b.codigo_banco === codigoBancoSeleccionado);
+    if (!selectedInFilter) {
+      const first = bancosFiltrados[0];
+      setCodigoBancoSeleccionado(first.codigo_banco);
+    }
+  }, [cuentaBcSeleccionada, bancosFiltrados, codigoBancoSeleccionado]);
 
   const buscarBeneficiario = useCallback(async (q) => {
     if (q.length < 2) { setResultados([]); return; }
@@ -210,10 +237,7 @@ export default function EditarOrden() {
       if (cuentaBcSeleccionada) {
         body.cuenta_banco_central = cuentaBcSeleccionada;
       }
-      if (codigoBancoSeleccionado) {
-        body.codigo_banco = codigoBancoSeleccionado;
-      }
-      if (isAdmin && numCheque) {
+      if (isAdmin && numCheque && permitirEditarCheque) {
         body.cheque_numero = numCheque;
       }
       await api.put(`/ordenes-pago/${id}`, body);
@@ -251,49 +275,35 @@ export default function EditarOrden() {
         </div>
         <div className="flex-shrink-0">
           <p className="text-xs text-gray-500 uppercase">Fecha Creación</p>
-          <p className="text-lg text-gray-900 dark:text-white">{orden?.fecha_orden ? new Date(orden.fecha_orden).toLocaleDateString('es-EC') : ''}</p>
-        </div>
-        <div className="flex-1 min-w-[220px]">
-          <MultiLineDropdown
-            label="Cuenta BC"
-            items={cuentasBancarias}
-            value={codigoBancoSeleccionado}
-            onChange={(codigo) => {
-              const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigo);
-              if (cuenta) {
-                setCuentaBcSeleccionada(cuenta.cuenta_bancaria);
-                setCodigoBancoSeleccionado(codigo);
-                setNumCheque(String(cuenta.siguiente_numero_cheque));
-              }
-            }}
-            placeholder="Seleccionar cuenta..."
+          <input
+            type="date"
+            value={fechaOrden}
+            onChange={(e) => setFechaOrden(e.target.value)}
             disabled={disabled}
-            getKey={(item) => item.codigo_banco}
-            getDisplay={(item) => [
-              item.descripcion_cuenta || item.cuenta_bancaria,
-              `${item.codigo_banco} - ${item.descripcion_banco || item.nombre_banco}`,
-            ]}
+            className="input-field"
           />
         </div>
         <div className="flex-1 min-w-[220px]">
           <MultiLineDropdown
-            label="Código Banco"
-            items={bancosFiltrados}
-            value={codigoBancoSeleccionado}
-            onChange={(codigo) => {
-              const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigo);
-              if (cuenta) {
-                setCuentaBcSeleccionada(cuenta.cuenta_bancaria);
-                setCodigoBancoSeleccionado(codigo);
-                setNumCheque(String(cuenta.siguiente_numero_cheque));
+            label="Cuenta BC"
+            items={cuentasCatalogo}
+            value={cuentaBcSeleccionada}
+            onChange={(cuenta) => {
+              setCuentaBcSeleccionada(cuenta);
+              const cuentaInfo = cuentasCatalogo.find((c) => c.cuenta_bancaria === cuenta);
+              if (cuentaInfo?.siguiente_numero_transfer) {
+                setNumCheque(String(cuentaInfo.siguiente_numero_transfer));
               }
+
+              const banco = cuentasBancarias.find((c) => c.cuenta_bancaria === cuenta);
+              setCodigoBancoSeleccionado(banco?.codigo_banco || '');
             }}
-            placeholder="Seleccionar banco..."
+            placeholder="Seleccionar cuenta..."
             disabled={disabled}
-            getKey={(item) => item.codigo_banco}
+            getKey={(item) => item.cuenta_bancaria}
             getDisplay={(item) => [
-              item.codigo_banco,
-              item.descripcion_banco || item.nombre_banco,
+              item.cuenta_bancaria,
+              item.descripcion_cuenta || item.cuenta_bancaria,
             ]}
           />
         </div>
@@ -305,9 +315,8 @@ export default function EditarOrden() {
             onChange={(e) => setNumCheque(e.target.value.toUpperCase())}
             className="input-field font-mono text-purple-400 font-bold w-32"
             placeholder="—"
-            disabled={disabled || !isAdmin}
+            disabled={disabled || !isAdmin || !permitirEditarCheque}
           />
-          {!isAdmin && <p className="mt-1 text-[11px] text-gray-500">Editable solo por administradores</p>}
         </div>
       </div>
 
@@ -498,3 +507,6 @@ export default function EditarOrden() {
     </div>
   );
 }
+      if (fechaOrden) {
+        body.fecha_orden = fechaOrden;
+      }

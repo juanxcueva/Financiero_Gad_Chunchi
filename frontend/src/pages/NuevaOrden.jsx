@@ -17,9 +17,12 @@ export default function NuevaOrden() {
   const [numOrden, setNumOrden] = useState('');
   const [numCheque, setNumCheque] = useState('');
   const [config, setConfig] = useState({});
+  const [permitirEditarCheque, setPermitirEditarCheque] = useState(false);
   const [retencionesCatalogo, setRetencionesCatalogo] = useState([]);
 
+  const [fechaOrden, setFechaOrden] = useState('');
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
+  const [cuentasBCCatalogo, setCuentasBCCatalogo] = useState([]);
   const [cuentaBcSeleccionada, setCuentaBcSeleccionada] = useState('');
   const [codigoBancoSeleccionado, setCodigoBancoSeleccionado] = useState('');
   // PDF Viewer
@@ -55,16 +58,30 @@ export default function NuevaOrden() {
     ]).then(([numRes, configRes, retRes, cuentasRes]) => {
       setNumOrden(numRes.data.data.numero_orden);
       setNumCheque(numRes.data.data.numero_cheque);
-      setConfig(configRes.data.data);
-      const defaultPct = String(configRes.data.data.iva_porcentaje || '15');
+      const cfg = configRes.data.data || {};
+      setConfig(cfg);
+      setPermitirEditarCheque(['1', 'true', 'si', 'sí', 'yes'].includes(String(cfg.permitir_editar_cheque || '').toLowerCase()));
+      const defaultPct = String(cfg.iva_porcentaje || '15');
       setPorcentajeIva(defaultPct);
       setAplicaIva((parseFloat(defaultPct) || 0) > 0);
       setRetencionesCatalogo(retRes.data.data);
+        const hoy = new Date().toISOString().split('T')[0];
+        setFechaOrden(hoy);
       const cuentas = cuentasRes.data.data || [];
+      const cuentasCatalogo = cuentasRes.data.cuentas_bc || [];
       setCuentasBancarias(cuentas);
-      if (cuentas.length > 0) {
-        const firstAccount = cuentas[0].cuenta_bancaria;
-        const firstBank = cuentas.find(c => c.cuenta_bancaria === firstAccount) || cuentas[0];
+      setCuentasBCCatalogo(cuentasCatalogo);
+      if (cuentasCatalogo.length > 0) {
+        const firstCuenta = cuentasCatalogo[0];
+        setCuentaBcSeleccionada(firstCuenta.cuenta_bancaria);
+        if (firstCuenta.siguiente_numero_transfer) {
+          setNumCheque(String(firstCuenta.siguiente_numero_transfer));
+        }
+
+        const firstBank = cuentas.find(c => c.cuenta_bancaria === firstCuenta.cuenta_bancaria);
+        setCodigoBancoSeleccionado(firstBank?.codigo_banco || '');
+      } else if (cuentas.length > 0) {
+        const firstBank = cuentas[0];
         setCuentaBcSeleccionada(firstBank.cuenta_bancaria);
         setCodigoBancoSeleccionado(firstBank.codigo_banco);
         setNumCheque(String(firstBank.siguiente_numero_cheque));
@@ -72,20 +89,29 @@ export default function NuevaOrden() {
     }).catch(() => toast.error('Error cargando configuración'));
   }, []);
 
-  // Cuando cambia el banco, actualizar el cheque sugerido
-  useEffect(() => {
-    if (codigoBancoSeleccionado) {
-      const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigoBancoSeleccionado);
-      if (cuenta) {
-        setNumCheque(String(cuenta.siguiente_numero_cheque));
-      }
-    }
-  }, [codigoBancoSeleccionado, cuentasBancarias]);
+  const cuentasCatalogo = cuentasBCCatalogo.length > 0
+    ? cuentasBCCatalogo
+    : [...new Set(cuentasBancarias.map((c) => c.cuenta_bancaria))].map((cuenta) => ({
+      cuenta_bancaria: cuenta,
+      descripcion_cuenta: cuenta,
+    }));
 
-  const cuentasUnicas = [...new Set(cuentasBancarias.map(c => c.cuenta_bancaria))];
   const bancosFiltrados = cuentaBcSeleccionada
     ? cuentasBancarias.filter(c => c.cuenta_bancaria === cuentaBcSeleccionada)
     : cuentasBancarias;
+
+  useEffect(() => {
+    if (bancosFiltrados.length === 0) {
+      setCodigoBancoSeleccionado('');
+      return;
+    }
+
+    const selectedInFilter = bancosFiltrados.some((b) => b.codigo_banco === codigoBancoSeleccionado);
+    if (!selectedInFilter) {
+      const first = bancosFiltrados[0];
+      setCodigoBancoSeleccionado(first.codigo_banco);
+    }
+  }, [cuentaBcSeleccionada, bancosFiltrados, codigoBancoSeleccionado]);
   // Auto-calculate IVA
   useEffect(() => {
     if (!aplicaIva) {
@@ -243,8 +269,11 @@ export default function NuevaOrden() {
       if (codigoBancoSeleccionado) {
         body.codigo_banco = codigoBancoSeleccionado;
       }
-      if (isAdmin && numCheque) {
+      if (isAdmin && permitirEditarCheque && numCheque) {
         body.cheque_numero = numCheque;
+      }
+      if (fechaOrden) {
+        body.fecha_orden = fechaOrden;
       }
       const { data } = await api.post('/ordenes-pago', body);
       toast.success(`Orden N° ${data.data.numero_orden} creada`);
@@ -297,7 +326,12 @@ export default function NuevaOrden() {
         </div>
         <div className="flex-shrink-0">
           <p className="text-xs text-gray-500 uppercase tracking-wider">Fecha</p>
-          <p className="text-lg text-gray-900 dark:text-white">{new Date().toLocaleDateString('es-EC')}</p>
+          <input
+            type="date"
+            value={fechaOrden}
+            onChange={(e) => setFechaOrden(e.target.value)}
+            className="input-field w-44"
+          />
         </div>
         <div className="flex-shrink-0">
           <p className="text-xs text-gray-500 uppercase tracking-wider">IVA Vigente</p>
@@ -306,44 +340,24 @@ export default function NuevaOrden() {
         <div className="flex-1 min-w-[220px]">
           <MultiLineDropdown
             label="Cuenta BC"
-            items={cuentasBancarias}
-            value={codigoBancoSeleccionado}
-            onChange={(codigo) => {
-              const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigo);
-              if (cuenta) {
-                setCuentaBcSeleccionada(cuenta.cuenta_bancaria);
-                setCodigoBancoSeleccionado(codigo);
-                setNumCheque(String(cuenta.siguiente_numero_cheque));
+            items={cuentasCatalogo}
+            value={cuentaBcSeleccionada}
+            onChange={(cuenta) => {
+              setCuentaBcSeleccionada(cuenta);
+              const cuentaInfo = cuentasCatalogo.find((c) => c.cuenta_bancaria === cuenta);
+              if (cuentaInfo?.siguiente_numero_transfer) {
+                setNumCheque(String(cuentaInfo.siguiente_numero_transfer));
               }
+
+              const banco = cuentasBancarias.find((c) => c.cuenta_bancaria === cuenta);
+              setCodigoBancoSeleccionado(banco?.codigo_banco || '');
             }}
             placeholder="Seleccionar cuenta..."
             disabled={false}
-            getKey={(item) => item.codigo_banco}
+            getKey={(item) => item.cuenta_bancaria}
             getDisplay={(item) => [
+              item.cuenta_bancaria,
               item.descripcion_cuenta || item.cuenta_bancaria,
-              `${item.codigo_banco} - ${item.descripcion_banco || item.nombre_banco}`,
-            ]}
-          />
-        </div>
-        <div className="flex-1 min-w-[220px]">
-          <MultiLineDropdown
-            label="Código Banco"
-            items={bancosFiltrados}
-            value={codigoBancoSeleccionado}
-            onChange={(codigo) => {
-              const cuenta = cuentasBancarias.find(c => c.codigo_banco === codigo);
-              if (cuenta) {
-                setCuentaBcSeleccionada(cuenta.cuenta_bancaria);
-                setCodigoBancoSeleccionado(codigo);
-                setNumCheque(String(cuenta.siguiente_numero_cheque));
-              }
-            }}
-            placeholder="Seleccionar banco..."
-            disabled={false}
-            getKey={(item) => item.codigo_banco}
-            getDisplay={(item) => [
-              item.codigo_banco,
-              item.descripcion_banco || item.nombre_banco,
             ]}
           />
         </div>
@@ -355,9 +369,13 @@ export default function NuevaOrden() {
             onChange={(e) => setNumCheque(e.target.value.toUpperCase())}
             className="input-field font-mono text-purple-400 font-bold w-32"
             placeholder="Auto"
-            disabled={!isAdmin}
+            disabled={!isAdmin || !permitirEditarCheque}
           />
-          {!isAdmin && <p className="mt-1 text-[11px] text-gray-500">Editable solo por administradores</p>}
+          {isAdmin && permitirEditarCheque ? (
+            <p className="mt-1 text-[11px] text-gray-500">Editable por administradores</p>
+          ) : (
+            <p className="mt-1 text-[11px] text-gray-500">Auto-generado</p>
+          )}
         </div>
       </div>
 

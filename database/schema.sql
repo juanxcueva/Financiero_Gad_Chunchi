@@ -103,11 +103,25 @@ CREATE TABLE financiero.cuentas_bancarias (
 CREATE INDEX idx_cuentas_codigo ON financiero.cuentas_bancarias(codigo_banco);
 
 -- ============================================================================
+-- TABLA: cuentas_bc_catalogo (catalogo Registro/Cuenta BC de Access)
+-- ============================================================================
+CREATE TABLE financiero.cuentas_bc_catalogo (
+    id SERIAL PRIMARY KEY,
+    cuenta_bancaria VARCHAR(50) UNIQUE NOT NULL,
+    descripcion_cuenta VARCHAR(200),
+    siguiente_numero_transfer INTEGER DEFAULT 1,
+    activo BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX idx_cuentas_bc_catalogo_cuenta ON financiero.cuentas_bc_catalogo(cuenta_bancaria);
+
+-- ============================================================================
 -- TABLA: auditoria_cheques (cambios manuales de secuencia/numero)
 -- ============================================================================
 CREATE TABLE financiero.auditoria_cheques (
     id SERIAL PRIMARY KEY,
-    orden_pago_id INTEGER REFERENCES financiero.ordenes_pago(id) ON DELETE SET NULL,
+    orden_pago_id INTEGER,
     accion VARCHAR(30) NOT NULL CHECK (accion IN ('MANUAL_OVERRIDE_CREAR', 'MANUAL_OVERRIDE_EDITAR')),
     codigo_banco VARCHAR(20),
     cheque_anterior VARCHAR(20),
@@ -197,6 +211,12 @@ CREATE INDEX idx_ordenes_fecha ON financiero.ordenes_pago(fecha);
 CREATE INDEX idx_ordenes_beneficiario ON financiero.ordenes_pago(nombre_beneficiario);
 CREATE INDEX idx_ordenes_situacion ON financiero.ordenes_pago(situacion);
 
+ALTER TABLE financiero.auditoria_cheques
+    ADD CONSTRAINT fk_auditoria_cheques_orden_pago
+    FOREIGN KEY (orden_pago_id)
+    REFERENCES financiero.ordenes_pago(id)
+    ON DELETE SET NULL;
+
 -- ============================================================================
 -- TABLA: ordenes_pago_retenciones
 -- ============================================================================
@@ -254,6 +274,7 @@ INSERT INTO financiero.configuracion (clave, valor, descripcion) VALUES
     ('cuenta_banco_central', '79220009', 'Cuenta del Banco Central del Ecuador'),
     ('codigo_banco', '1110303', 'Código del banco para cheques'),
     ('banco_nombre', 'Banco C. el Ecuador Matriz Quito', 'Nombre del banco'),
+    ('permitir_editar_cheque', '0', 'Permitir edición manual del número de cheque'),
     ('siguiente_numero_orden', '29002', 'Siguiente número de orden de pago'),
     ('siguiente_numero_cheque', '26643', 'Siguiente número de cheque');
 
@@ -269,6 +290,23 @@ INSERT INTO financiero.cuentas_bancarias (
     ('1110310', 'Bco. Pichincha', '79220401', 'CHUNCHI INFA PE', 'Cta. 01523914-8 Bco. Pichincha Suc. Riobamba', 3),
     ('1110311', 'Banco Bolivariano', '79220398', 'GAD MUN-CANT CHUNCHI', 'GADCHUNCHI BDE CREDITO CN', 3)
 ON CONFLICT (codigo_banco) DO NOTHING;
+
+-- Catalogo Cuenta BC (APContabSPICuentasBC)
+INSERT INTO financiero.cuentas_bc_catalogo (
+    cuenta_bancaria, descripcion_cuenta, siguiente_numero_transfer
+) VALUES
+    ('41007717', 'CHEQUES UNICEF', 296),
+    ('79220009', 'TRANSFERENCIAS GENERALES', 26289),
+    ('79220061', 'TRANSFERENCIA MATERNIDAD GRATUITA', 3),
+    ('79220074', 'TRANSFERENCIAS 65% imp renta', 172),
+    ('79220075', 'TRANSFERENCIAS 35%', 151),
+    ('79220196', 'CHUNCHI- INFA', 217),
+    ('79220223', 'CHUNCHI INFA PE', 88),
+    ('79220337', 'GAD MUN-CHUNCHI-DIRECCION DISTRITAL MIES DN', 440),
+    ('79220389', 'GADCHUNCHI BDE CREDITO CN', 1),
+    ('79220398', 'CONVENIO 65386 BD - GAD CHUNCHI', 8),
+    ('79220401', 'CONVENIO 65393 BD - GAD CHUNCHI', 6)
+ON CONFLICT (cuenta_bancaria) DO NOTHING;
 
 -- Firmantes por defecto (basado en los datos del comprobante)
 INSERT INTO financiero.firmantes (cargo, nombre, orden) VALUES
