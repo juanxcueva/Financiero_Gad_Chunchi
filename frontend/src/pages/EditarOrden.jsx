@@ -70,21 +70,21 @@ export default function EditarOrden() {
       setPermitirEditarCheque(['1', 'true', 'si', 'sí', 'yes'].includes(String(cfg.permitir_editar_cheque || '').toLowerCase()));
       const retencionesOrden = o.retenciones?.length ? o.retenciones : [];
       const retencionesDesdeCatalogo = retencionesOrden
-        .filter(r => !(r.tipo === 'OTRO' && (parseFloat(r.base_imponible) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0))
+        .filter(r => !(r.tipo === 'OTRO' && (parseFloat(r.base) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0))
         .map(r => {
           // Store the catalog ID if it matches
           const matchingCatalogo = retRes.data.data?.find(cat => cat.nombre === r.concepto && cat.porcentaje === r.porcentaje);
           return {
             tipo: r.tipo,
             concepto: r.concepto,
-            base: String(r.base_imponible || ''),
+            base: String(r.base || ''),
             porcentaje: String(r.porcentaje || ''),
             valor: String(r.valor || ''),
             catalogoId: matchingCatalogo?.id || null,
           };
         });
       const retencionesManuales = retencionesOrden
-        .filter(r => r.tipo === 'OTRO' && (parseFloat(r.base_imponible) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0)
+        .filter(r => r.tipo === 'OTRO' && (parseFloat(r.base) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0)
         .map(r => ({
           concepto: r.concepto,
           valor: String(r.valor || ''),
