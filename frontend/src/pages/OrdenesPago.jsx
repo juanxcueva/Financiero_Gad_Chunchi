@@ -202,6 +202,7 @@ export default function OrdenesPago() {
               <tr className="border-b border-gray-200/70 dark:border-white/5">
                 <th className="text-left text-xs text-gray-600 dark:text-gray-400 font-medium px-4 py-3 uppercase tracking-wider">N°</th>
                 <th className="text-left text-xs text-gray-600 dark:text-gray-400 font-medium px-4 py-3 uppercase tracking-wider">Fecha</th>
+                <th className="text-left text-xs text-gray-600 dark:text-gray-400 font-medium px-4 py-3 uppercase tracking-wider">Cheque / Cuenta BC</th>
                 <th className="text-left text-xs text-gray-600 dark:text-gray-400 font-medium px-4 py-3 uppercase tracking-wider">Beneficiario</th>
                 <th className="text-right text-xs text-gray-600 dark:text-gray-400 font-medium px-4 py-3 uppercase tracking-wider">Cargos</th>
                 <th className="text-right text-xs text-gray-600 dark:text-gray-400 font-medium px-4 py-3 uppercase tracking-wider">Retenciones</th>
@@ -222,7 +223,21 @@ export default function OrdenesPago() {
                   <td className="px-4 py-3 text-sm font-mono neon-text">{o.numero_orden}</td>
                   <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{formatDate(o.fecha)}</td>
                   <td className="px-4 py-3">
-                    <p className="text-sm text-gray-900 dark:text-white truncate max-w-[200px]">{o.nombre_beneficiario}</p>
+                    <p className="text-sm font-mono text-purple-500 dark:text-purple-300">{o.cheque_numero || '—'}</p>
+                    <p className="text-xs text-gray-500">{o.cuenta_banco_central || 'Sin Cuenta BC'}</p>
+                    <p className="text-xs text-cyan-600 dark:text-cyan-300">Serie: {o.serie_cuenta || 'Sin descripción'}</p>
+                  </td>
+                  <td className="px-4 py-3">
+                    <p
+                      className="text-sm text-gray-900 dark:text-white max-w-[240px] break-words overflow-hidden"
+                      style={{
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                      }}
+                    >
+                      {o.nombre_beneficiario}
+                    </p>
                     <p className="text-xs text-gray-500">{o.codigo_beneficiario}</p>
                   </td>
                   <td className="px-4 py-3 text-sm text-right text-gray-700 dark:text-gray-300">{formatMoney(o.total_cargos)}</td>

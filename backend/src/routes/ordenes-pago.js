@@ -90,8 +90,12 @@ router.get('/', authMiddleware, asyncHandler(async (req, res) => {
     `SELECT o.id, o.numero_orden, o.fecha, o.situacion,
             o.codigo_beneficiario, o.nombre_beneficiario,
             o.valor_planilla, o.valor_iva, o.total_cargos, o.total_retenciones, o.liquido_pagar,
-            o.cheque_numero, o.created_at
+            o.cheque_numero, o.cuenta_banco_central,
+            cbc.descripcion_cuenta AS serie_cuenta,
+            o.created_at
      FROM financiero.ordenes_pago o
+     LEFT JOIN financiero.cuentas_bc_catalogo cbc
+       ON cbc.cuenta_bancaria = o.cuenta_banco_central
      ${whereClause}
      ORDER BY o.numero_orden DESC
      LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
