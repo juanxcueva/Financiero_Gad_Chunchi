@@ -11,11 +11,25 @@ fi
 MDB_FILE="${MDB_FILE:-$DEFAULT_MDB_FILE}"
 CSV_FILE="$ROOT_DIR/migracion_output/APContabOrdenPago.csv"
 
+# Cargar credenciales del backend si existen, para reutilizar la misma configuración que usa la app.
+if [[ -f "$ROOT_DIR/backend/.env" ]]; then
+  # shellcheck disable=SC1091
+  set -a
+  source "$ROOT_DIR/backend/.env"
+  set +a
+fi
+if [[ -f "$ROOT_DIR/backend/.env.local" ]]; then
+  # shellcheck disable=SC1091
+  set -a
+  source "$ROOT_DIR/backend/.env.local"
+  set +a
+fi
+
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-financiero_gad_chunchi}"
-DB_USER="${DB_USER:-financiero_user}"
-DB_PASSWORD="${DB_PASSWORD:-financiero_pass}"
+DB_USER="${DB_USER:-${PGUSER:-financiero_user}}"
+DB_PASSWORD="${DB_PASSWORD:-${PGPASSWORD:-financiero_pass}}"
 JWT_SECRET="${JWT_SECRET:-cambia_esto_en_produccion}"
 
 RUN_SMOKE_TESTS="${RUN_SMOKE_TESTS:-1}"
