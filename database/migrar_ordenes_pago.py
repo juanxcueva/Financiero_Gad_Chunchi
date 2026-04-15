@@ -78,7 +78,6 @@ def corregir_cheque_typo(cheque_str, num_orden, fecha_str):
             return correcto
     
     return cheque_str
-    return round(num, 3)
 
 
 def limpiar_entero(val):
