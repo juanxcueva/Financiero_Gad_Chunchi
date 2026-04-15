@@ -232,7 +232,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   .firmas tr { page-break-inside: avoid; break-inside: avoid-page; }
   .firmas td { text-align: center; padding: 5px; border: none; }
   .firma-box { padding-top: 28px; vertical-align: bottom; page-break-inside: avoid; break-inside: avoid; min-height: 110px; }
-  .firma-linea { border-top: 1px solid #000; padding-top: 4px; margin-bottom: 20px; min-height: 30px; }
+  .firma-linea { border-top: 1px solid #000; padding-top: 2px; margin-bottom: 8px; min-height: 0px; }
   .firma-nombre { font-size: 11px; }
   .firma-cargo { font-weight: bold; font-size: 11px; margin-bottom: 2px; }
   .firmas-grid { margin-top: 8px; }
@@ -543,7 +543,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       borders: noBorders,
       width: { size: Math.floor(100 / maxCols), type: WidthType.PERCENTAGE },
       children: [
-        new Paragraph({ spacing: { before: 200, after: 0 }, children: [new TextRun({ text: '', size: 1 })] }),
+        new Paragraph({ spacing: { before: 280, after: 0 }, children: [new TextRun({ text: '', size: 1 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 40 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 20 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 20 }, children: [new TextRun({ text: nombre, size: 18 })] }),
