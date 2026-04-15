@@ -63,7 +63,7 @@ export default function EditarOrden() {
       setCuentaBcSeleccionada(o.cuenta_banco_central || '');
       setCodigoBancoSeleccionado(o.codigo_banco || '');
       setNumCheque(o.cheque_numero || '');
-        setFechaOrden(o.fecha_orden ? o.fecha_orden.split('T')[0] : '');
+      setFechaOrden(o.fecha ? o.fecha.split('T')[0] : '');
       setCuentasBancarias(cuentasRes.data.data || []);
       setCuentasBCCatalogo(cuentasRes.data.cuentas_bc || []);
       const cfg = cfgRes.data.data || {};
