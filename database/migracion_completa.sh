@@ -32,7 +32,8 @@ DB_USER="${DB_USER:-${PGUSER:-financiero_user}}"
 DB_PASSWORD="${DB_PASSWORD:-${PGPASSWORD:-financiero_pass}}"
 JWT_SECRET="${JWT_SECRET:-cambia_esto_en_produccion}"
 
-RUN_SMOKE_TESTS="${RUN_SMOKE_TESTS:-1}"
+# Los smoke tests crean/modifican datos reales de prueba; dejarlos desactivados por defecto en produccion.
+RUN_SMOKE_TESTS="${RUN_SMOKE_TESTS:-0}"
 
 echo "== Migracion completa GAD Chunchi =="
 echo "ROOT_DIR: $ROOT_DIR"

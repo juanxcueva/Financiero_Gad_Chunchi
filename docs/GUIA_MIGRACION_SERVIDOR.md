@@ -106,6 +106,7 @@ o el comando que uses normalmente con systemd o node directo.
 - Solo un usuario administrador puede forzar manualmente otro número.
 - Si un administrador ajusta un cheque, el cambio queda registrado en `financiero.auditoria_cheques`.
 - Para evitar duplicados, el backend valida que no exista ya ese cheque para el mismo banco.
+- La migración completa ya no ejecuta smoke tests por defecto para no crear órdenes de prueba; si quieres ejecutarlos manualmente, usa `RUN_SMOKE_TESTS=1 ./database/migracion_completa.sh`.
 
 ## Si cambias solo el frontend
 No basta con subir solo el frontend. También debes subir el backend porque:
