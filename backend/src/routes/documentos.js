@@ -170,6 +170,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   const buildFirmaCellHtml = (cargo, nombre) => `
     <td style="text-align:center;padding:5px;border:none;width:${(100 / maxFirmantesCols).toFixed(2)}%;">
       <div class="firma-box">
+        <div style="height:50px;"></div>
         <div class="firma-linea"></div>
         <div class="firma-cargo">${cargo}</div>
         <div class="firma-nombre">${nombre}</div>
@@ -528,10 +529,6 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     children.push(new Paragraph({ children: [
       new TextRun({ text: `Cheque Nº ${orden.cheque_numero || ''}  —  Cuenta BC: ${orden.cuenta_banco_central || '—'}`, size: 18, color: '666666' }),
     ] }));
-    
-    // Add space before signatures
-    children.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
-    children.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
 
     // Signatures
     const allFirmantesWord = [
@@ -546,9 +543,10 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       borders: noBorders,
       width: { size: Math.floor(100 / maxCols), type: WidthType.PERCENTAGE },
       children: [
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 80, after: 80 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 100 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 }, children: [new TextRun({ text: nombre, size: 18 })] }),
+        new Paragraph({ spacing: { before: 200, after: 0 }, children: [new TextRun({ text: '', size: 1 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 40 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 20 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 20 }, children: [new TextRun({ text: nombre, size: 18 })] }),
       ],
     });
 
