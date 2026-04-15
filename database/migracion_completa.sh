@@ -2,7 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MDB_FILE="${MDB_FILE:-/home/juan/Documents/Access/Sofacd1.mdb}"
+ACCESS_INBOX_DIR="${ACCESS_INBOX_DIR:-$ROOT_DIR/uploads/access}"
+DEFAULT_MDB_FILE="/home/juan/Documents/Access/Sofacd1.mdb"
+MDB_FILE="${1:-${MDB_FILE:-}}"
+if [[ -z "$MDB_FILE" ]]; then
+  MDB_FILE="$(ls -1t "$ACCESS_INBOX_DIR"/*.{mdb,accdb} 2>/dev/null | head -n 1 || true)"
+fi
+MDB_FILE="${MDB_FILE:-$DEFAULT_MDB_FILE}"
 CSV_FILE="$ROOT_DIR/migracion_output/APContabOrdenPago.csv"
 
 DB_HOST="${DB_HOST:-localhost}"
@@ -16,6 +22,7 @@ RUN_SMOKE_TESTS="${RUN_SMOKE_TESTS:-1}"
 
 echo "== Migracion completa GAD Chunchi =="
 echo "ROOT_DIR: $ROOT_DIR"
+echo "ACCESS_INBOX_DIR: $ACCESS_INBOX_DIR"
 echo "MDB_FILE: $MDB_FILE"
 echo "DB: $DB_HOST:$DB_PORT/$DB_NAME (user=$DB_USER)"
 
@@ -28,6 +35,7 @@ done
 
 if [[ ! -f "$MDB_FILE" ]]; then
   echo "ERROR: no existe el archivo MDB: $MDB_FILE"
+  echo "Coloque el archivo en $ACCESS_INBOX_DIR o pase la ruta como primer argumento."
   exit 1
 fi
 

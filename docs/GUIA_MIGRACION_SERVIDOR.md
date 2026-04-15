@@ -14,8 +14,13 @@ export DB_PORT=5432
 export DB_NAME=financiero_gad_chunchi
 export DB_USER=tu_usuario
 export DB_PASSWORD=tu_password
-export MDB_FILE=/ruta/a/Sofacd1.mdb
 ./database/migracion_completa.sh
+```
+
+Si ya subiste el archivo Access desde la interfaz, el script tomará automáticamente el archivo más reciente de `uploads/access`. Si quieres forzar uno específico, pásalo como primer argumento:
+
+```bash
+./database/migracion_completa.sh /ruta/al/archivo.mdb
 ```
 
 Esto hace todo de una vez:
