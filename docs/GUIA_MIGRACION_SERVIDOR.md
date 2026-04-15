@@ -42,6 +42,7 @@ Eso crea o actualiza:
 - `financiero.auditoria_cheques`
 - campos de descripciones en cuentas bancarias
 - datos iniciales de bancos/cuentas
+- sincronización de secuenciales de cheque usando el último cheque real registrado
 
 ## Archivos que debes desplegar
 

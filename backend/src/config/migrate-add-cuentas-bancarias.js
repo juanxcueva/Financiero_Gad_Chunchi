@@ -278,6 +278,39 @@ async function upsertCatalogs({ bancos, cuentasBC }) {
     );
   }
 
+  // Sincronizar secuenciales con historial real para evitar conflictos por desfase.
+  await pool.query(`
+    UPDATE financiero.cuentas_bc_catalogo cbc
+    SET siguiente_numero_transfer = GREATEST(
+      COALESCE(cbc.siguiente_numero_transfer, 1),
+      COALESCE(mx.max_cheque + 1, 1)
+    )
+    FROM (
+      SELECT
+        cuenta_banco_central,
+        MAX(CAST(cheque_numero AS BIGINT)) AS max_cheque
+      FROM financiero.ordenes_pago
+      WHERE cheque_numero ~ '^[0-9]+$'
+      GROUP BY cuenta_banco_central
+    ) mx
+    WHERE mx.cuenta_banco_central = cbc.cuenta_bancaria
+  `);
+
+  // Mantener tambien el secuencial global en coherencia con el mayor cheque numerico historico.
+  await pool.query(`
+    UPDATE financiero.configuracion cfg
+    SET valor = GREATEST(
+      COALESCE(NULLIF(cfg.valor, '')::BIGINT, 1),
+      COALESCE((
+        SELECT MAX(CAST(cheque_numero AS BIGINT)) + 1
+        FROM financiero.ordenes_pago
+        WHERE cheque_numero ~ '^[0-9]+$'
+      ), 1)
+    )::TEXT,
+    updated_at = NOW()
+    WHERE cfg.clave = 'siguiente_numero_cheque'
+  `);
+
   await pool.query('COMMIT');
 }
 
