@@ -176,6 +176,7 @@ export default function NuevaOrden() {
       copy[i].tipo = cat.tipo;
       copy[i].concepto = cat.nombre;
       copy[i].porcentaje = String(cat.porcentaje);
+      copy[i].catalogoId = cat.id;
       // Recalculate if base exists
       const base = parseFloat(copy[i].base) || 0;
       copy[i].valor = (base * cat.porcentaje / 100).toFixed(2);
@@ -537,7 +538,7 @@ export default function NuevaOrden() {
           <div key={i} className="grid grid-cols-12 gap-2 items-end">
             <div className="col-span-3">
               {i === 0 && <label className="block text-xs text-gray-500 mb-1">Catálogo</label>}
-              <select onChange={(e) => selectRetCatalogo(i, e.target.value)} className="input-field text-sm" defaultValue="">
+              <select value={r.catalogoId || ''} onChange={(e) => selectRetCatalogo(i, e.target.value)} className="input-field text-sm">
                 <option value="">Seleccionar...</option>
                 {retencionesCatalogo.map(cat => (
                   <option key={cat.id} value={cat.id}>{cat.nombre}</option>

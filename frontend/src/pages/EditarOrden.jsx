@@ -71,13 +71,18 @@ export default function EditarOrden() {
       const retencionesOrden = o.retenciones?.length ? o.retenciones : [];
       const retencionesDesdeCatalogo = retencionesOrden
         .filter(r => !(r.tipo === 'OTRO' && (parseFloat(r.base_imponible) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0))
-        .map(r => ({
-          tipo: r.tipo,
-          concepto: r.concepto,
-          base: String(r.base_imponible || ''),
-          porcentaje: String(r.porcentaje || ''),
-          valor: String(r.valor || ''),
-        }));
+        .map(r => {
+          // Store the catalog ID if it matches
+          const matchingCatalogo = retRes.data.data?.find(cat => cat.nombre === r.concepto && cat.porcentaje === r.porcentaje);
+          return {
+            tipo: r.tipo,
+            concepto: r.concepto,
+            base: String(r.base_imponible || ''),
+            porcentaje: String(r.porcentaje || ''),
+            valor: String(r.valor || ''),
+            catalogoId: matchingCatalogo?.id || null,
+          };
+        });
       const retencionesManuales = retencionesOrden
         .filter(r => r.tipo === 'OTRO' && (parseFloat(r.base_imponible) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0)
         .map(r => ({
@@ -170,6 +175,7 @@ export default function EditarOrden() {
       copy[i].tipo = cat.tipo;
       copy[i].concepto = cat.nombre;
       copy[i].porcentaje = String(cat.porcentaje);
+      copy[i].catalogoId = cat.id;
       const base = parseFloat(copy[i].base) || 0;
       copy[i].valor = (base * cat.porcentaje / 100).toFixed(2);
       setRetenciones(copy);
@@ -431,7 +437,7 @@ export default function EditarOrden() {
         {retenciones.map((r, i) => (
           <div key={i} className="grid grid-cols-12 gap-2 items-end">
             <div className="col-span-3">
-              <select onChange={(e) => selectRetCatalogo(i, e.target.value)} className="input-field text-sm" defaultValue="" disabled={disabled}>
+              <select value={r.catalogoId || ''} onChange={(e) => selectRetCatalogo(i, e.target.value)} className="input-field text-sm" disabled={disabled}>
                 <option value="">Catálogo...</option>
                 {retencionesCatalogo.map(cat => <option key={cat.id} value={cat.id}>{cat.nombre}</option>)}
               </select>
