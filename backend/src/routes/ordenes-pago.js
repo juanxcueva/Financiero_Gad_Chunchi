@@ -17,10 +17,24 @@ router.get('/cuentas-bancarias', authMiddleware, asyncHandler(async (req, res) =
   );
 
   const cuentasBcResult = await pool.query(
-    `SELECT cuenta_bancaria, descripcion_cuenta, siguiente_numero_transfer
-     FROM financiero.cuentas_bc_catalogo
+    `SELECT
+       cbc.cuenta_bancaria,
+       cbc.descripcion_cuenta,
+       GREATEST(
+         COALESCE(cbc.siguiente_numero_transfer, 1),
+         COALESCE(mx.max_cheque + 1, 1)
+       )::INT AS siguiente_numero_transfer
+     FROM financiero.cuentas_bc_catalogo cbc
+     LEFT JOIN (
+       SELECT
+         cuenta_banco_central,
+         MAX(CAST(cheque_numero AS BIGINT)) AS max_cheque
+       FROM financiero.ordenes_pago
+       WHERE cheque_numero ~ '^[0-9]+$'
+       GROUP BY cuenta_banco_central
+     ) mx ON mx.cuenta_banco_central = cbc.cuenta_bancaria
      WHERE activo = true
-     ORDER BY cuenta_bancaria`
+     ORDER BY cbc.cuenta_bancaria`
   );
 
   res.json({
@@ -222,6 +236,19 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       );
       if (cuentaBcResult.rows.length > 0) {
         numCheque = parseInt(cuentaBcResult.rows[0].siguiente_numero_transfer) || 1;
+
+        // Alinear sugerido con el ultimo cheque realmente usado para esa Cuenta BC.
+        const maxChequeResult = await client.query(
+          `SELECT COALESCE(MAX(CAST(cheque_numero AS BIGINT)), 0) AS max_cheque
+           FROM financiero.ordenes_pago
+           WHERE cuenta_banco_central = $1
+             AND cheque_numero ~ '^[0-9]+$'`,
+          [selectedCuentaBC]
+        );
+        const nextFromHistory = (parseInt(maxChequeResult.rows[0]?.max_cheque, 10) || 0) + 1;
+        if (nextFromHistory > numCheque) {
+          numCheque = nextFromHistory;
+        }
       }
     }
 
