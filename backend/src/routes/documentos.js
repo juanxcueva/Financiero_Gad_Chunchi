@@ -528,8 +528,12 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     children.push(new Paragraph({ children: [
       new TextRun({ text: `Cheque Nº ${orden.cheque_numero || ''}  —  Cuenta BC: ${orden.cuenta_banco_central || '—'}`, size: 18, color: '666666' }),
     ] }));
+    
+    // Add space before signatures
+    children.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
+    children.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
 
-    // Signatures follow immediately after the cheque info to avoid wasted blank space
+    // Signatures
     const allFirmantesWord = [
       { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '' },
       ...firmResult.rows,
@@ -542,9 +546,9 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       borders: noBorders,
       width: { size: Math.floor(100 / maxCols), type: WidthType.PERCENTAGE },
       children: [
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 10, after: 30 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 50 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 10 }, children: [new TextRun({ text: nombre, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 80, after: 80 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 100 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 }, children: [new TextRun({ text: nombre, size: 18 })] }),
       ],
     });
 
