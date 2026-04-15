@@ -48,6 +48,7 @@ def limpiar_porcentaje(val):
         return 999.999
     if num < -999.999:
         return -999.999
+    return num
 
 
 def corregir_cheque_typo(cheque_str, num_orden, fecha_str):
