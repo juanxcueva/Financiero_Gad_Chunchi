@@ -48,6 +48,36 @@ def limpiar_porcentaje(val):
         return 999.999
     if num < -999.999:
         return -999.999
+
+
+def corregir_cheque_typo(cheque_str, num_orden, fecha_str):
+    """
+    Corrige typos conocidos en números de cheque según análisis de datos históricos.
+    
+    El 26642 del 2023-03-29 es un outlier documentado: debería ser 24642.
+    Patrón detectado en Access: 24641 → 26642 → 24643 (typo de digitación)
+    """
+    if cheque_str is None:
+        return None
+    
+    cheque_str = cheque_str.strip()
+    if not cheque_str or not cheque_str.isdigit():
+        return cheque_str
+    
+    cheque_num = int(cheque_str)
+    
+    # Diccionario de correcciones conocidas: {num_orden: (cheque_incorrecto, cheque_correcto)}
+    correcciones_conocidas = {
+        27361: (26642, '24642'),  # Typo histórico del 2023-03-29: 26642 → 24642
+    }
+    
+    if num_orden in correcciones_conocidas:
+        incorrecto, correcto = correcciones_conocidas[num_orden]
+        if cheque_num == incorrecto:
+            print(f"  ✓ CORRIGIENDO CHEQUE: Orden {num_orden} (Fecha {fecha_str}): {incorrecto} → {correcto}")
+            return correcto
+    
+    return cheque_str
     return round(num, 3)
 
 
@@ -278,7 +308,7 @@ def migrar(csv_path):
                 total_retenciones,
                 liquido,
                 limpiar_texto(row.get('CodigoBanco')),
-                limpiar_texto(row.get('ChequeNum')),
+                corregir_cheque_typo(limpiar_texto(row.get('ChequeNum')), num_orden, row.get('FechaOrden', '')),
                 limpiar_decimal(row.get('ValorCheque')),
                 num_orden,
                 limpiar_texto(row.get('UserMov')),
