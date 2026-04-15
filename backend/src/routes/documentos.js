@@ -208,7 +208,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   @page { size: A4; margin: 20mm 15mm; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #000; line-height: 1.4; }
   .header { text-align: center; margin-bottom: 10px; }
-  .header img { width: 60px; margin-bottom: 5px; }
+  .header img { width: 100px; margin-bottom: 8px; }
   .header h1 { font-size: 16px; margin: 2px 0; letter-spacing: 1px; }
   .header h2 { font-size: 13px; margin: 2px 0; font-weight: normal; }
   .header .num { font-size: 22px; font-weight: bold; color: #c00; }
@@ -230,8 +230,8 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   .firmas { width: 100%; border-collapse: collapse; page-break-inside: auto; break-inside: auto; }
   .firmas tr { page-break-inside: avoid; break-inside: avoid-page; }
   .firmas td { text-align: center; padding: 5px; border: none; }
-  .firma-box { padding-top: 28px; vertical-align: bottom; page-break-inside: avoid; break-inside: avoid; min-height: 78px; }
-  .firma-linea { border-top: 1px solid #000; padding-top: 4px; margin-bottom: 14px; min-height: 15px; }
+  .firma-box { padding-top: 28px; vertical-align: bottom; page-break-inside: avoid; break-inside: avoid; min-height: 110px; }
+  .firma-linea { border-top: 1px solid #000; padding-top: 4px; margin-bottom: 20px; min-height: 30px; }
   .firma-nombre { font-size: 11px; }
   .firma-cargo { font-weight: bold; font-size: 11px; margin-bottom: 2px; }
   .firmas-grid { margin-top: 8px; }
@@ -286,7 +286,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
 
   <div class="cheque-info">
     Cheque Nº ${orden.cheque_numero || ''} &nbsp;&nbsp;
-    Banco: ${config.banco_nombre || ''} &nbsp;&nbsp; ${orden.codigo_banco || ''}
+    Cuenta BC: ${orden.cuenta_banco_central || '—'}
   </div>
 
   <div class="firmas-wrapper">
@@ -418,7 +418,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       const logoBuffer = fs.readFileSync(LOGO_PATH);
       headerChildren.unshift(new Paragraph({
         alignment: AlignmentType.CENTER,
-        children: [new ImageRun({ data: logoBuffer, transformation: { width: 60, height: 60 }, type: 'png' })],
+        children: [new ImageRun({ data: logoBuffer, transformation: { width: 100, height: 100 }, type: 'png' })],
       }));
     }
 
@@ -526,7 +526,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
 
     // Cheque info
     children.push(new Paragraph({ children: [
-      new TextRun({ text: `Cheque Nº ${orden.cheque_numero || ''}  Banco: ${config.banco_nombre || ''}  ${orden.codigo_banco || ''}`, size: 18, color: '666666' }),
+      new TextRun({ text: `Cheque Nº ${orden.cheque_numero || ''}  —  Cuenta BC: ${orden.cuenta_banco_central || '—'}`, size: 18, color: '666666' }),
     ] }));
 
     // Signatures follow immediately after the cheque info to avoid wasted blank space
@@ -542,9 +542,9 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       borders: noBorders,
       width: { size: Math.floor(100 / maxCols), type: WidthType.PERCENTAGE },
       children: [
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 20 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 35 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 0 }, children: [new TextRun({ text: nombre, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 10, after: 30 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 50 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 10 }, children: [new TextRun({ text: nombre, size: 18 })] }),
       ],
     });
 

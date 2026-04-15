@@ -513,6 +513,3 @@ export default function EditarOrden() {
     </div>
   );
 }
-      if (fechaOrden) {
-        body.fecha_orden = fechaOrden;
-      }
