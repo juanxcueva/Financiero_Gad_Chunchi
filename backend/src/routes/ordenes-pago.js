@@ -255,10 +255,25 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
         [selectedCuentaBC, finalChequeNum]
       );
       if (chequeDuplicado.rows.length > 0) {
+        await registrarAuditoria({
+          tabla: 'ordenes_pago',
+          registro_id: null,
+          accion: isManualChequeOverride ? 'CONFLICTO_CHEQUE_MANUAL' : 'CONFLICTO_CHEQUE_AUTOMATICO',
+          datos_anteriores: null,
+          datos_nuevos: {
+            cuenta_banco_central: selectedCuentaBC,
+            cheque_numero_intentado: finalChequeNum,
+            orden_conflictiva_id: chequeDuplicado.rows[0].id,
+          },
+          usuario_id: req.user.id,
+          usuario_nombre: req.user.nombre_completo,
+          ip_address: req.ip,
+        });
+
         await client.query('ROLLBACK');
         return res.status(409).json({
           success: false,
-          error: `El cheque ${finalChequeNum} ya existe para la Cuenta BC ${selectedCuentaBC}`,
+          error: `Conflicto de secuencial: el cheque ${finalChequeNum} ya existe para la Cuenta BC ${selectedCuentaBC}. Revise el secuencial antes de continuar.`,
         });
       }
     }

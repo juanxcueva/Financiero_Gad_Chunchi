@@ -195,6 +195,7 @@ export default function EditarOrden() {
   const handleSubmit = async () => {
     if (!nombreBeneficiario.trim()) return toast.error('Ingrese el beneficiario');
     if (!detalle.trim()) return toast.error('Ingrese el detalle');
+    if (detalle.trim().length < 10) return toast.error('El detalle debe tener al menos 10 caracteres');
     if (totalCargos <= 0) return toast.error('Ingrese al menos un valor en Subtotal u Otros Cargos');
 
     setSaving(true);
@@ -244,7 +245,12 @@ export default function EditarOrden() {
       toast.success('Orden actualizada');
       navigate('/ordenes-pago');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Error al actualizar');
+      const details = err.response?.data?.details;
+      if (Array.isArray(details) && details.length > 0 && details[0]?.message) {
+        toast.error(details[0].message);
+      } else {
+        toast.error(err.response?.data?.error || 'Error al actualizar');
+      }
     } finally {
       setSaving(false);
     }
