@@ -31,7 +31,7 @@ export default function Configuracion() {
   const [migrationState, setMigrationState] = useState({ current: null, last: null });
   const [backupLoading, setBackupLoading] = useState(false);
   const [restoreFile, setRestoreFile] = useState(null);
-  const [restoreing, setRestoring] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [restoreProgress, setRestoreProgress] = useState({ status: 'idle', progress: 0, logs: [], elapsedSeconds: 0 });
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
