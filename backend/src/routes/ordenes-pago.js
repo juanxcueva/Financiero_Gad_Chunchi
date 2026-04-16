@@ -197,6 +197,7 @@ router.get('/:id', authMiddleware, asyncHandler(async (req, res) => {
 // POST /api/ordenes-pago
 router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validateBody(crearOrdenSchema), asyncHandler(async (req, res) => {
   const client = await pool.connect();
+  let transactionFinished = false;
   try {
     await client.query('BEGIN');
 
@@ -276,6 +277,7 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
     }
 
     const requestedChequeNum = cheque_numero ? String(cheque_numero).trim() : '';
+    const suggestedChequeNum = String(numCheque || '');
     const isManualChequeOverride = isAdmin && permitirEditarCheque && requestedChequeNum && requestedChequeNum !== String(numCheque);
 
     if (isAdmin && requestedChequeNum && requestedChequeNum !== String(numCheque) && !permitirEditarCheque) {
@@ -447,30 +449,35 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       );
     }
     await client.query('COMMIT');
+    transactionFinished = true;
 
     // Auditoría
-    await registrarAuditoria({
-      tabla: 'ordenes_pago',
-      registro_id: ordenId,
-      accion: 'CREAR',
-      datos_nuevos: { numero_orden: numOrden, beneficiario: nombre_beneficiario, total: totalCargos },
-      usuario_id: req.user.id,
-      usuario_nombre: req.user.nombre,
-      ip_address: req.ip,
-    });
-
-    if (isManualChequeOverride) {
-      await registrarAuditoriaCheque({
-        orden_pago_id: ordenId,
-        accion: 'MANUAL_OVERRIDE_CREAR',
-        codigo_banco: finalCodigoBanco,
-        cheque_anterior: suggestedChequeNum,
-        cheque_nuevo: finalChequeNum,
-        motivo: 'Ajuste manual de emergencia al crear orden',
+    try {
+      await registrarAuditoria({
+        tabla: 'ordenes_pago',
+        registro_id: ordenId,
+        accion: 'CREAR',
+        datos_nuevos: { numero_orden: numOrden, beneficiario: nombre_beneficiario, total: totalCargos },
         usuario_id: req.user.id,
         usuario_nombre: req.user.nombre,
         ip_address: req.ip,
       });
+
+      if (isManualChequeOverride) {
+        await registrarAuditoriaCheque({
+          orden_pago_id: ordenId,
+          accion: 'MANUAL_OVERRIDE_CREAR',
+          codigo_banco: finalCodigoBanco,
+          cheque_anterior: suggestedChequeNum,
+          cheque_nuevo: finalChequeNum,
+          motivo: 'Ajuste manual de emergencia al crear orden',
+          usuario_id: req.user.id,
+          usuario_nombre: req.user.nombre,
+          ip_address: req.ip,
+        });
+      }
+    } catch (auditErr) {
+      console.error('Error registrando auditoria de creacion:', auditErr.message);
     }
 
     res.status(201).json({
@@ -478,24 +485,31 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       data: { id: ordenId, numero_orden: numOrden, numero_cheque: finalChequeNum },
     });
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (!transactionFinished) {
+      await client.query('ROLLBACK');
+    }
     console.error('Error creando orden:', err.message, err.detail || '', err.code || '');
     
     // Mensajes de error más específicos
     let errorMsg = 'Error interno';
+    let statusCode = 500;
     if (err.code === '23505') {
       errorMsg = 'Conflicto: El cheque o número de orden ya existe';
+      statusCode = 409;
     } else if (err.code === '23503') {
       errorMsg = 'Datos inválidos: Referencia a beneficiario o cuenta no existe';
+      statusCode = 400;
     } else if (err.code === '22P02') {
       errorMsg = 'Datos inválidos: Formato incorrecto en números o fechas';
+      statusCode = 400;
     } else if (err.message?.includes('Following_numero')) {
       errorMsg = 'Error: No se puede obtener el siguiente número de orden';
     } else if (err.message?.includes('cuentas_bc')) {
       errorMsg = 'Error: Cuenta BC no válida o no configurada';
+      statusCode = 400;
     }
     
-    res.status(500).json({ success: false, error: errorMsg, details: process.env.NODE_ENV === 'development' ? err.message : undefined });
+    res.status(statusCode).json({ success: false, error: errorMsg, details: process.env.NODE_ENV === 'development' ? err.message : undefined });
   } finally {
     client.release();
   }
