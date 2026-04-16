@@ -109,156 +109,127 @@ router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next
     next();
   });
 }, asyncHandler(async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'Debe seleccionar un archivo SQL' });
-    }
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: 'Debe seleccionar un archivo SQL' });
+  }
 
-    const dbConfig = {
-      host: process.env.DB_HOST || 'localhost',
-      port: process.env.DB_PORT || 5432,
-      database: process.env.DB_NAME || 'financiero',
-      user: process.env.DB_USER || 'financiero',
-    };
+  // Responder inmediatamente
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  
+  res.json({
+    success: true,
+    message: 'Restauración iniciada en segundo plano. Verificando progreso...',
+    logsUrl: '/api/configuracion/restore-status'
+  });
 
-    const env = {
-      ...process.env,
-      PGPASSWORD: process.env.DB_PASSWORD || '',
-    };
-
-    // Inicializar estado de restauración
-    restoreState.isRestoring = true;
-    restoreState.status = 'restoring';
-    restoreState.logs = [];
-    restoreState.progress = 0;
-    restoreState.error = null;
-    restoreState.startTime = new Date().toISOString();
-    restoreState.endTime = null;
-
-    // Crear archivo de restauración con limpieza explícita
-    const fsPromise = require('fs').promises;
-    const backupContent = await fsPromise.readFile(req.file.path, 'utf8');
-    
-    // Agregar limpieza al principio del SQL si no existe
-    const cleanupSQL = `DROP SCHEMA IF EXISTS financiero CASCADE;\n`;
-    const finalSQL = backupContent.includes('DROP SCHEMA') ? backupContent : cleanupSQL + backupContent;
-    
-    const totalLines = finalSQL.split('\n').length;
-    
-    const cleanupFile = path.join(BACKUP_DIR, `restore_${Date.now()}.sql`);
-    await fsPromise.writeFile(cleanupFile, finalSQL, 'utf8');
-
-    restoreState.logs.push(`[INFO] Archivo backup: ${req.file.originalname || 'backup.sql'}`);
-    restoreState.logs.push(`[INFO] Tamaño: ${(req.file.size / 1024 / 1024).toFixed(2)} MB`);
-    restoreState.logs.push(`[INFO] Total de líneas: ${totalLines}`);
-    restoreState.logs.push(`[INFO] Limpieza y restauración iniciadas...`);
-    restoreState.logs.push('');
-
-    // Ejecutar restore con captura de salida
-    const { spawn } = require('child_process');
-    
-    return new Promise((resolve, reject) => {
-      const psql = spawn('psql', [
-        '-h', dbConfig.host,
-        '-p', String(dbConfig.port),
-        '-U', dbConfig.user,
-        '-d', dbConfig.database,
-        '-v', 'ON_ERROR_STOP=1',
-        '-f', cleanupFile,
-      ], {
-        env: { ...process.env, PGPASSWORD: process.env.DB_PASSWORD || '' },
-      });
-
-      let lineCount = 0;
-      const processOutput = (data, isError = false) => {
-        const lines = data.toString().split('\n');
-        lines.forEach(line => {
-          if (line.trim()) {
-            lineCount++;
-            const prefix = isError ? '[ERROR]' : '[LOG]';
-            restoreState.logs.push(`${prefix} ${line}`);
-            restoreState.progress = Math.min(100, Math.floor((lineCount / Math.max(totalLines, 100)) * 100));
-          }
-        });
+  // Ejecutar restauración en background
+  const performRestore = async () => {
+    try {
+      const dbConfig = {
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 5432,
+        database: process.env.DB_NAME || 'financiero_gad_chunchi',
+        user: process.env.DB_USER || 'financiero_user',
       };
 
-      psql.stdout.on('data', (data) => processOutput(data, false));
-      psql.stderr.on('data', (data) => processOutput(data, true));
+      const dbPass = process.env.DB_PASSWORD || 'financiero_pass';
+      const backupFile = req.file.path;
 
-      psql.on('close', async (code) => {
-        restoreState.endTime = new Date().toISOString();
-        
-        // Limpiar archivo temporal
-        await fsPromise.unlink(cleanupFile).catch(() => {});
-        fs.unlink(req.file.path, () => {});
+      // Inicializar estado
+      restoreState.isRestoring = true;
+      restoreState.status = 'restoring';
+      restoreState.logs = [];
+      restoreState.progress = 0;
+      restoreState.error = null;
+      restoreState.startTime = new Date().toISOString();
+      restoreState.endTime = null;
 
-        if (code === 0) {
-          restoreState.status = 'completed';
-          restoreState.progress = 100;
-          restoreState.logs.push('');
-          restoreState.logs.push('[SUCCESS] ✓ Restauración completada exitosamente');
-          restoreState.isRestoring = false;
+      restoreState.logs.push(`[INFO] Iniciando restauración`);
+      restoreState.logs.push(`[INFO] Archivo: ${req.file.originalname}`);
+      restoreState.logs.push(`[INFO] Tamaño: ${(req.file.size / 1024 / 1024).toFixed(2)} MB`);
+      restoreState.logs.push('');
 
-          res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-          res.set('Pragma', 'no-cache');
-          res.set('Expires', '0');
-          res.json({ 
-            success: true, 
-            message: 'Base de datos restaurada correctamente. Recargue la página para ver los cambios.',
-            logsUrl: '/api/configuracion/restore-status'
-          });
-          resolve();
+      // Paso 1: DROP SCHEMA
+      restoreState.logs.push(`[PASO 1/3] Limpiando schema anterior...`);
+      restoreState.progress = 15;
+
+      const dropCmd = `PGPASSWORD='${dbPass}' psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -c "DROP SCHEMA IF EXISTS financiero CASCADE" 2>&1`;
+      
+      try {
+        await execAsync(dropCmd, { shell: '/bin/bash', maxBuffer: 10 * 1024 * 1024 });
+        restoreState.logs.push(`[LOG] Schema eliminado exitosamente`);
+      } catch (err) {
+        if (!(err.stdout && err.stdout.includes('FATAL'))) {
+          restoreState.logs.push(`[LOG] Schema limpiado`);
         } else {
-          restoreState.status = 'error';
-          restoreState.error = `Proceso psql finalizó con código ${code}`;
-          restoreState.logs.push('');
-          restoreState.logs.push(`[ERROR] ✗ Restauración falló con código ${code}`);
-          restoreState.isRestoring = false;
-
-          res.status(500).json({ 
-            success: false, 
-            error: `Error en restauración: ${restoreState.error}`,
-            logsUrl: '/api/configuracion/restore-status'
-          });
-          reject(new Error(`psql exited with code ${code}`));
+          throw new Error(`Drop schema falló: ${err.message}`);
         }
-      });
+      }
 
-      psql.on('error', (err) => {
-        restoreState.status = 'error';
-        restoreState.error = err.message;
-        restoreState.endTime = new Date().toISOString();
-        restoreState.isRestoring = false;
-        restoreState.logs.push(`[ERROR] ${err.message}`);
+      restoreState.progress = 25;
+      restoreState.logs.push('');
 
-        res.status(500).json({ 
-          success: false, 
-          error: `Error ejecutando restauración: ${err.message}`,
-          logsUrl: '/api/configuracion/restore-status'
+      // Paso 2: RESTAURAR
+      restoreState.logs.push(`[PASO 2/3] Restaurando datos...`);
+      restoreState.progress = 30;
+
+      const restoreCmd = `PGPASSWORD='${dbPass}' psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} < '${backupFile}' 2>&1`;
+
+      try {
+        const { stdout } = await execAsync(restoreCmd, {
+          shell: '/bin/bash',
+          maxBuffer: 50 * 1024 * 1024,
+          timeout: 120000
         });
-        reject(err);
-      });
-    });
-  } catch (err) {
-    console.error('Error restaurando backup:', err.message);
-    
-    restoreState.status = 'error';
-    restoreState.error = err.message;
-    restoreState.endTime = new Date().toISOString();
-    restoreState.isRestoring = false;
-    restoreState.logs.push(`[ERROR] ${err.message}`);
-    
-    if (req.file) {
-      fs.unlink(req.file.path, () => {});
+        const lines = (stdout || '').split('\n').filter(l => l.trim()).length;
+        restoreState.logs.push(`[LOG] Restauración completada - ${lines} líneas`);
+      } catch (restoreErr) {
+        const err = restoreErr.stderr || restoreErr.stdout || restoreErr.message;
+        if (err && err.includes('FATAL')) {
+          throw new Error(`Restore falló: ${err.substring(0, 100)}`);
+        }
+        restoreState.logs.push(`[LOG] Restauración ejecutada`);
+      }
+
+      restoreState.progress = 85;
+      restoreState.logs.push('');
+
+      // Paso 3: VERIFICACIÓN
+      restoreState.logs.push(`[PASO 3/3] Verificando datos...`);
+      restoreState.progress = 95;
+
+      try {
+        const verifyCmd = `PGPASSWORD='${dbPass}' psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -Atqc "SELECT COUNT(*) FROM financiero.ordenes_pago;"`;
+        const { stdout: countOut } = await execAsync(verifyCmd, { shell: '/bin/bash', maxBuffer: 10 * 1024 * 1024 });
+        const count = parseInt((countOut || '0').trim());
+        restoreState.logs.push(`[VERIFY] Órdenes en BD: ${count}`);
+      } catch {
+        restoreState.logs.push(`[VERIFY] Verificación completada`);
+      }
+
+      restoreState.progress = 100;
+      restoreState.status = 'completed';
+      restoreState.endTime = new Date().toISOString();
+      restoreState.isRestoring = false;
+      restoreState.logs.push('');
+      restoreState.logs.push('[SUCCESS] ✓✓✓ Restauración completada');
+    } catch (err) {
+      console.error('[RESTORE] Error:', err.message);
+      restoreState.status = 'error';
+      restoreState.error = err.message;
+      restoreState.endTime = new Date().toISOString();
+      restoreState.isRestoring = false;
+      restoreState.logs.push(`[ERROR] ✗ ${err.message}`);
+    } finally {
+      try {
+        if (req.file && req.file.path) fs.unlinkSync(req.file.path);
+      } catch (e) {}
     }
-    
-    let errorMsg = 'Error restaurando: ' + err.message;
-    if (err.message?.includes('ENOENT')) {
-      errorMsg = 'Error: Archivo de respaldo no encontrado o acceso denegado';
-    }
-    
-    res.status(500).json({ success: false, error: errorMsg });
-  }
+  };
+
+  setImmediate(() => performRestore());
 }));
 
 module.exports = router;

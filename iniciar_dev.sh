@@ -55,7 +55,7 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 echo "Iniciando backend en puerto $BACKEND_PORT..."
-(
+(Opción 3
   cd "$BACKEND_DIR"
   PORT="$BACKEND_PORT" node src/app.js
 ) &
