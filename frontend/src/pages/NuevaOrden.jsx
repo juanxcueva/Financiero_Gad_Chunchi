@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HiOutlinePlus, HiOutlineTrash, HiOutlineMagnifyingGlass } from 'react-icons/hi2';
@@ -31,6 +31,7 @@ export default function NuevaOrden() {
   const [pdfNumOrden, setPdfNumOrden] = useState('');
   const [generandoDoc, setGenerandoDoc] = useState(null);
   const [downloadProgress, setDownloadProgress] = useState(null);
+  const submitLockRef = useRef(false);
 
   // Form state
   const [codigoBeneficiario, setCodigoBeneficiario] = useState('');
@@ -223,11 +224,13 @@ export default function NuevaOrden() {
   };
 
   const handleSubmit = async (generarPdf = false) => {
+    if (submitLockRef.current || loading) return;
     if (!nombreBeneficiario.trim()) return toast.error('Ingrese el beneficiario');
     if (!detalle.trim()) return toast.error('Ingrese el detalle');
     if (detalle.trim().length < 10) return toast.error('El detalle debe tener al menos 10 caracteres');
     if (totalCargos <= 0) return toast.error('Ingrese al menos un valor en Subtotal u Otros Cargos');
 
+    submitLockRef.current = true;
     setLoading(true);
     try {
       const pctIva = aplicaIva ? (parseFloat(porcentajeIva) || 0) : 0;
@@ -315,6 +318,7 @@ export default function NuevaOrden() {
       }
     } finally {
       setLoading(false);
+      submitLockRef.current = false;
     }
   };
 

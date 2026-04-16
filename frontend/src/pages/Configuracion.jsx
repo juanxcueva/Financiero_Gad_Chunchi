@@ -169,9 +169,7 @@ export default function Configuracion() {
     }, 300); // Poll cada 300ms para actualización más rápida
     
     try {
-      const response = await api.post('/configuracion/restore', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const response = await api.post('/configuracion/restore', formData);
       toast.info(response.data.message || 'Restauración iniciada...');
       setRestoreFile(null);
     } catch (err) {
@@ -625,15 +623,15 @@ export default function Configuracion() {
                   type="file"
                   accept=".sql"
                   onChange={(e) => setRestoreFile(e.target.files?.[0] || null)}
-                  disabled={restoreing}
+                  disabled={restoring}
                   className="input-field text-sm disabled:opacity-50"
                 />
                 <button
                   onClick={restoreDatabase}
-                  disabled={!restoreFile || restoreing}
+                  disabled={!restoreFile || restoring}
                   className="btn-primary text-sm disabled:opacity-50"
                 >
-                  {restoreing ? 'Restaurando...' : 'Restaurar Base de Datos'}
+                  {restoring ? 'Restaurando...' : 'Restaurar Base de Datos'}
                 </button>
               </div>
               

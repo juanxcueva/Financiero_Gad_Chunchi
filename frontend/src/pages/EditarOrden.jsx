@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { HiOutlinePlus, HiOutlineTrash, HiOutlineMagnifyingGlass } from 'react-icons/hi2';
@@ -35,6 +35,7 @@ export default function EditarOrden() {
   const [retencionesManuales, setRetencionesManuales] = useState([]);
   const [permitirEditarCheque, setPermitirEditarCheque] = useState(false);
   const [fechaOrden, setFechaOrden] = useState('');
+  const submitLockRef = useRef(false);
 
   const [busqueda, setBusqueda] = useState('');
   const [resultados, setResultados] = useState([]);
@@ -199,11 +200,13 @@ export default function EditarOrden() {
   const liquidoPagar = totalCargos - totalRetenciones;
 
   const handleSubmit = async () => {
+    if (submitLockRef.current || saving) return;
     if (!nombreBeneficiario.trim()) return toast.error('Ingrese el beneficiario');
     if (!detalle.trim()) return toast.error('Ingrese el detalle');
     if (detalle.trim().length < 10) return toast.error('El detalle debe tener al menos 10 caracteres');
     if (totalCargos <= 0) return toast.error('Ingrese al menos un valor en Subtotal u Otros Cargos');
 
+    submitLockRef.current = true;
     setSaving(true);
     try {
       const pctIva = aplicaIva ? (parseFloat(porcentajeIva) || 0) : 0;
@@ -259,6 +262,7 @@ export default function EditarOrden() {
       }
     } finally {
       setSaving(false);
+      submitLockRef.current = false;
     }
   };
 
