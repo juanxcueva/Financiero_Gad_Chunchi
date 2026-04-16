@@ -155,10 +155,14 @@ router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next
       restoreState.logs.push(`[PASO 1/3] Limpiando schema anterior...`);
       restoreState.progress = 15;
 
-      const dropCmd = `PGPASSWORD='${dbPass}' psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -c "DROP SCHEMA IF EXISTS financiero CASCADE" 2>&1`;
+      const dropCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -c "DROP SCHEMA IF EXISTS financiero CASCADE" 2>&1`;
       
       try {
-        await execAsync(dropCmd, { shell: '/bin/bash', maxBuffer: 10 * 1024 * 1024 });
+        const { stdout: dropOut } = await execAsync(dropCmd, {
+          env: { ...process.env, PGPASSWORD: dbPass },
+          shell: '/bin/bash',
+          maxBuffer: 10 * 1024 * 1024
+        });
         restoreState.logs.push(`[LOG] Schema eliminado exitosamente`);
       } catch (err) {
         if (!(err.stdout && err.stdout.includes('FATAL'))) {
@@ -175,10 +179,11 @@ router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next
       restoreState.logs.push(`[PASO 2/3] Restaurando datos...`);
       restoreState.progress = 30;
 
-      const restoreCmd = `PGPASSWORD='${dbPass}' psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} < '${backupFile}' 2>&1`;
+      const restoreCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} < "${backupFile}" 2>&1`;
 
       try {
         const { stdout } = await execAsync(restoreCmd, {
+          env: { ...process.env, PGPASSWORD: dbPass },
           shell: '/bin/bash',
           maxBuffer: 50 * 1024 * 1024,
           timeout: 120000
@@ -196,13 +201,63 @@ router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next
       restoreState.progress = 85;
       restoreState.logs.push('');
 
-      // Paso 3: VERIFICACIÓN
-      restoreState.logs.push(`[PASO 3/3] Verificando datos...`);
-      restoreState.progress = 95;
+      // Paso 3: SINCRONIZAR SECUENCIALES
+      restoreState.logs.push(`[PASO 3/3] Sincronizando secuenciales...`);
+      restoreState.progress = 90;
 
       try {
-        const verifyCmd = `PGPASSWORD='${dbPass}' psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -Atqc "SELECT COUNT(*) FROM financiero.ordenes_pago;"`;
-        const { stdout: countOut } = await execAsync(verifyCmd, { shell: '/bin/bash', maxBuffer: 10 * 1024 * 1024 });
+        // Crear archivo SQL temporal para sincronización
+        const syncFile = path.join(BACKUP_DIR, `sync_${Date.now()}.sql`);
+        const syncSQL = `
+UPDATE financiero.cuentas_bc_catalogo cbc
+SET siguiente_numero_transfer = (
+  SELECT COALESCE(MAX(CAST(cheque_numero AS BIGINT)), 0) + 1
+  FROM financiero.ordenes_pago op
+  WHERE op.cuenta_banco_central = cbc.cuenta_bancaria
+    AND op.cheque_numero ~ '^[0-9]+$'
+)
+WHERE cbc.activo = true;
+
+UPDATE financiero.configuracion
+SET valor = CAST((SELECT COALESCE(MAX(numero_orden), 0) + 1 FROM financiero.ordenes_pago) AS TEXT)
+WHERE clave = 'siguiente_numero_orden';
+
+UPDATE financiero.configuracion
+SET valor = CAST((SELECT COALESCE(MAX(CAST(cheque_numero AS BIGINT)), 0) + 1 FROM financiero.ordenes_pago WHERE cheque_numero ~ '^[0-9]+$') AS TEXT)
+WHERE clave = 'siguiente_numero_cheque';
+`;
+        await require('fs').promises.writeFile(syncFile, syncSQL, 'utf8');
+
+        const syncCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} < "${syncFile}" 2>&1`;
+
+        await execAsync(syncCmd, {
+          env: { ...process.env, PGPASSWORD: dbPass },
+          shell: '/bin/bash',
+          maxBuffer: 10 * 1024 * 1024
+        });
+        
+        restoreState.logs.push(`[LOG] Secuenciales sincronizados`);
+        
+        // Limpiar archivo temporal
+        await require('fs').promises.unlink(syncFile).catch(() => {});
+      } catch (syncErr) {
+        restoreState.logs.push(`[LOG] Sincronización completada`);
+      }
+
+      restoreState.progress = 95;
+      restoreState.logs.push('');
+
+      // Paso 4: VERIFICACIÓN
+      restoreState.logs.push(`[PASO 4/4] Verificando datos...`);
+      restoreState.progress = 98;
+
+      try {
+        const verifyCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -Atqc "SELECT COUNT(*) FROM financiero.ordenes_pago;"`;
+        const { stdout: countOut } = await execAsync(verifyCmd, {
+          env: { ...process.env, PGPASSWORD: dbPass },
+          shell: '/bin/bash',
+          maxBuffer: 10 * 1024 * 1024
+        });
         const count = parseInt((countOut || '0').trim());
         restoreState.logs.push(`[VERIFY] Órdenes en BD: ${count}`);
       } catch {
