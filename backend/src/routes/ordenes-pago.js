@@ -542,7 +542,14 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), valida
     const effectiveCodigoBanco = codigo_banco || existing.rows[0].codigo_banco;
     const effectiveCuentaBC = cuenta_banco_central || existing.rows[0].cuenta_banco_central;
 
-    if (isAdmin && (cheque_numero || cuenta_banco_central || codigo_banco) && effectiveCuentaBC && effectiveChequeNumero && effectiveChequeNumero !== '0') {
+    // Determinar si el cheque fue modificado manualmente
+    const isManualChequeEdit = isAdmin &&
+      permitirEditarCheque &&
+      cheque_numero &&
+      String(cheque_numero).trim() !== String(existingChequeNumero || '').trim();
+
+    // Verificar cheque duplicado solo cuando se cambia el cheque o la cuenta BC
+    if (isAdmin && effectiveCuentaBC && effectiveChequeNumero && effectiveChequeNumero !== '0') {
       const chequeDuplicado = await client.query(
         `SELECT id FROM financiero.ordenes_pago
          WHERE cuenta_banco_central = $1 AND cheque_numero = $2 AND id <> $3

@@ -37,6 +37,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/ordenes-pago', require('./routes/ordenes-pago'));
 app.use('/api/beneficiarios', require('./routes/beneficiarios'));
 app.use('/api/configuracion', require('./routes/configuracion'));
+app.use('/api/cuentas-bc', require('./routes/cuentas-bc'));
 app.use('/api/auditoria', require('./routes/auditoria'));
 app.use('/api/documentos', documentLimiter, require('./routes/documentos'));
 app.use('/api/migracion', require('./routes/migracion'));

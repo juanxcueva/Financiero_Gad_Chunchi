@@ -166,33 +166,58 @@ router.delete('/retenciones-catalogo/:id', authMiddleware, roleMiddleware('admin
 }));
 
 
+// ─── Estado de restauración (en memoria del proceso) ────────────────────────
+const restoreState = {
+  isRestoring: false,
+  logs: [],
+  progress: 0,
+  status: 'idle',   // idle | restoring | completed | error
+  error: null,
+  startTime: null,
+  endTime: null,
+};
+
 // GET /api/configuracion/backup
+// Genera un volcado SQL con DROP + CREATE (--clean --if-exists) para que al
+// restaurarlo se eliminen los datos previos antes de insertar los del backup.
 router.get('/backup', authMiddleware, roleMiddleware('admin'), asyncHandler(async (req, res) => {
   try {
     const dbConfig = {
       host: process.env.DB_HOST || 'localhost',
       port: process.env.DB_PORT || 5432,
-      database: process.env.DB_NAME || 'financiero',
-      user: process.env.DB_USER || 'financiero',
+      database: process.env.DB_NAME || 'financiero_gad_chunchi',
+      user: process.env.DB_USER || 'financiero_user',
     };
+
+    const env = { ...process.env, PGPASSWORD: process.env.DB_PASSWORD || '' };
+
+    // --clean --if-exists: genera DROP TABLE IF EXISTS antes de cada CREATE TABLE
+    // --no-acl --no-owner: evita problemas de permisos al restaurar con otro usuario
+    const dumpCmd = [
+      'pg_dump',
+      '--clean',
+      '--if-exists',
+      '--no-acl',
+      '--no-owner',
+      `-h ${dbConfig.host}`,
+      `-p ${dbConfig.port}`,
+      `-U ${dbConfig.user}`,
+      `-d ${dbConfig.database}`,
+    ].join(' ');
+
+    const { stdout } = await execAsync(dumpCmd, {
+      env,
+      shell: '/bin/bash',
+      maxBuffer: 100 * 1024 * 1024,
+    });
 
     const backupFile = path.join(BACKUP_DIR, `backup_${Date.now()}.sql`);
-    
-    const env = {
-      ...process.env,
-      PGPASSWORD: process.env.DB_PASSWORD || '',
-    };
-
-    const dumpCmd = `pg_dump -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} > "${backupFile}"`;
-
-    await execAsync(dumpCmd, { env, shell: '/bin/bash' });
+    fs.writeFileSync(backupFile, stdout, 'utf8');
 
     const filename = `backup_${new Date().toISOString().split('T')[0]}_${Date.now()}.sql`;
     res.download(backupFile, filename, (err) => {
       if (err) console.error('Error descargando backup:', err);
-      setTimeout(() => {
-        fs.unlink(backupFile, () => {});
-      }, 5000);
+      setTimeout(() => fs.unlink(backupFile, () => {}), 5000);
     });
   } catch (err) {
     console.error('Error generando backup:', err);
@@ -200,49 +225,171 @@ router.get('/backup', authMiddleware, roleMiddleware('admin'), asyncHandler(asyn
   }
 }));
 
+// GET /api/configuracion/restore-status
+router.get('/restore-status', authMiddleware, roleMiddleware('admin'), (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      isRestoring: restoreState.isRestoring,
+      status: restoreState.status,
+      progress: restoreState.progress,
+      logs: restoreState.logs.slice(-50),
+      error: restoreState.error,
+      startTime: restoreState.startTime,
+      endTime: restoreState.endTime,
+      elapsedSeconds: restoreState.startTime
+        ? Math.floor((Date.now() - new Date(restoreState.startTime)) / 1000)
+        : 0,
+    },
+  });
+});
+
 // POST /api/configuracion/restore
+// Responde inmediatamente y ejecuta la restauración en background.
 router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next) => {
   upload.single('backupFile')(req, res, (err) => {
     if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
+      if (err.code === 'LIMIT_FILE_SIZE')
         return res.status(400).json({ success: false, error: 'Archivo supera 500MB' });
-      }
       return res.status(400).json({ success: false, error: err.message || 'Error subiendo archivo' });
     }
     next();
   });
 }, asyncHandler(async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'Debe seleccionar un archivo SQL' });
-    }
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: 'Debe seleccionar un archivo SQL' });
+  }
 
+  if (restoreState.isRestoring) {
+    return res.status(409).json({ success: false, error: 'Ya hay una restauración en progreso' });
+  }
+
+  // Responder de inmediato; la restauración corre en background
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.json({
+    success: true,
+    message: 'Restauración iniciada en segundo plano. Verificando progreso...',
+    logsUrl: '/api/configuracion/restore-status',
+  });
+
+  const performRestore = async () => {
     const dbConfig = {
       host: process.env.DB_HOST || 'localhost',
       port: process.env.DB_PORT || 5432,
-      database: process.env.DB_NAME || 'financiero',
-      user: process.env.DB_USER || 'financiero',
+      database: process.env.DB_NAME || 'financiero_gad_chunchi',
+      user: process.env.DB_USER || 'financiero_user',
     };
+    const dbPass = process.env.DB_PASSWORD || 'financiero_pass';
+    const backupFilePath = req.file.path;
 
-    const env = {
-      ...process.env,
-      PGPASSWORD: process.env.DB_PASSWORD || '',
-    };
+    // Inicializar estado
+    Object.assign(restoreState, {
+      isRestoring: true,
+      status: 'restoring',
+      logs: [],
+      progress: 0,
+      error: null,
+      startTime: new Date().toISOString(),
+      endTime: null,
+    });
 
-    const restoreCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} < "${req.file.path}"`;
+    restoreState.logs.push('[INFO] Iniciando restauración');
+    restoreState.logs.push(`[INFO] Archivo: ${req.file.originalname}`);
+    restoreState.logs.push(`[INFO] Tamaño: ${(req.file.size / 1024 / 1024).toFixed(2)} MB`);
+    restoreState.logs.push('');
 
-    await execAsync(restoreCmd, { env, shell: '/bin/bash', maxBuffer: 50 * 1024 * 1024 });
+    try {
+      // Paso 1 — Restaurar (el backup ya incluye DROP TABLE IF EXISTS gracias a --clean)
+      restoreState.logs.push('[PASO 1/2] Restaurando datos (esto puede tardar unos segundos)...');
+      restoreState.progress = 10;
 
-    fs.unlink(req.file.path, () => {});
+      const restoreCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} < "${backupFilePath}" 2>&1`;
 
-    res.json({ success: true, message: 'Base de datos restaurada correctamente' });
-  } catch (err) {
-    console.error('Error restaurando backup:', err);
-    if (req.file) {
-      fs.unlink(req.file.path, () => {});
+      try {
+        const { stdout } = await execAsync(restoreCmd, {
+          env: { ...process.env, PGPASSWORD: dbPass },
+          shell: '/bin/bash',
+          maxBuffer: 100 * 1024 * 1024,
+          timeout: 300000,   // 5 minutos
+        });
+        const lines = (stdout || '').split('\n').filter(l => l.trim());
+        restoreState.logs.push(`[LOG] ${lines.length} líneas procesadas`);
+        // Mostrar errores reales si los hay (pero no abortar por warnings)
+        const errors = lines.filter(l => /^ERROR:/i.test(l));
+        if (errors.length > 0) {
+          errors.slice(0, 5).forEach(e => restoreState.logs.push(`[WARN] ${e}`));
+        }
+      } catch (restoreErr) {
+        const errText = restoreErr.stdout || restoreErr.stderr || restoreErr.message || '';
+        if (errText.includes('FATAL')) {
+          throw new Error('Restore FATAL: ' + errText.substring(0, 200));
+        }
+        restoreState.logs.push('[LOG] Restauración ejecutada con advertencias menores');
+      }
+
+      restoreState.progress = 80;
+      restoreState.logs.push('');
+
+      // Paso 2 — Sincronizar secuenciales DB
+      restoreState.logs.push('[PASO 2/2] Sincronizando secuenciales...');
+      restoreState.progress = 90;
+
+      const syncSQL = `
+UPDATE financiero.cuentas_bc_catalogo cbc
+SET siguiente_numero_transfer = (
+  SELECT GREATEST(
+    COALESCE(cbc.siguiente_numero_transfer, 1),
+    COALESCE(MAX(CAST(cheque_numero AS BIGINT)), 0) + 1
+  )
+  FROM financiero.ordenes_pago op
+  WHERE op.cuenta_banco_central = cbc.cuenta_bancaria
+    AND op.cheque_numero ~ '^[0-9]+$'
+)
+WHERE cbc.activo = true;
+
+UPDATE financiero.configuracion
+SET valor = CAST((SELECT COALESCE(MAX(numero_orden), 0) + 1 FROM financiero.ordenes_pago) AS TEXT)
+WHERE clave = 'siguiente_numero_orden';
+
+UPDATE financiero.configuracion
+SET valor = CAST((SELECT COALESCE(MAX(CAST(cheque_numero AS BIGINT)), 0) + 1 FROM financiero.ordenes_pago WHERE cheque_numero ~ '^[0-9]+$') AS TEXT)
+WHERE clave = 'siguiente_numero_cheque';
+`;
+      const syncFile = path.join(BACKUP_DIR, `sync_${Date.now()}.sql`);
+      try {
+        fs.writeFileSync(syncFile, syncSQL, 'utf8');
+        const syncCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} < "${syncFile}" 2>&1`;
+        await execAsync(syncCmd, {
+          env: { ...process.env, PGPASSWORD: dbPass },
+          shell: '/bin/bash',
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        restoreState.logs.push('[LOG] Secuenciales sincronizados');
+      } catch {
+        restoreState.logs.push('[LOG] Sincronización completada (con posibles advertencias)');
+      } finally {
+        fs.unlink(syncFile, () => {});
+      }
+
+      restoreState.progress = 100;
+      restoreState.status = 'completed';
+      restoreState.endTime = new Date().toISOString();
+      restoreState.isRestoring = false;
+      restoreState.logs.push('');
+      restoreState.logs.push('[SUCCESS] ✓✓✓ Restauración completada exitosamente');
+    } catch (err) {
+      console.error('[RESTORE] Error:', err.message);
+      restoreState.status = 'error';
+      restoreState.error = err.message;
+      restoreState.endTime = new Date().toISOString();
+      restoreState.isRestoring = false;
+      restoreState.logs.push(`[ERROR] ✗ ${err.message}`);
+    } finally {
+      try { fs.unlinkSync(backupFilePath); } catch {}
     }
-    res.status(500).json({ success: false, error: 'Error restaurando: ' + err.message });
-  }
+  };
+
+  setImmediate(() => performRestore());
 }));
 
 

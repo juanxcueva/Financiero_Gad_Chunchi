@@ -11,6 +11,7 @@ const EditarOrden = lazy(() => import('./pages/EditarOrden'));
 const Beneficiarios = lazy(() => import('./pages/Beneficiarios'));
 const Configuracion = lazy(() => import('./pages/Configuracion'));
 const Auditoria = lazy(() => import('./pages/Auditoria'));
+const CuentasBC = lazy(() => import('./pages/CuentasBC'));
 
 function ProtectedRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -53,6 +54,7 @@ export default function App() {
                     <Route path="/ordenes-pago/nueva" element={<NuevaOrden />} />
                     <Route path="/ordenes-pago/:id/editar" element={<EditarOrden />} />
                     <Route path="/beneficiarios" element={<Beneficiarios />} />
+                    <Route path="/cuentas-bc" element={<CuentasBC />} />
                     <Route path="/configuracion" element={<Configuracion />} />
                     <Route path="/auditoria" element={<Auditoria />} />
                   </Routes>

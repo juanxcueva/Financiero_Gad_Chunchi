@@ -5,6 +5,7 @@ import {
   HiOutlineHome, HiOutlineDocumentText, HiOutlineUserGroup,
   HiOutlineCog6Tooth, HiOutlineShieldCheck, HiOutlineArrowRightOnRectangle,
   HiOutlineBars3, HiOutlinePlus, HiOutlineMoon, HiOutlineSun,
+  HiOutlineBuildingLibrary,
 } from 'react-icons/hi2';
 
 const menuItems = [
@@ -12,6 +13,7 @@ const menuItems = [
   { path: '/ordenes-pago', label: 'Órdenes de Pago', icon: HiOutlineDocumentText, color: 'from-purple-400 to-pink-500' },
   { path: '/ordenes-pago/nueva', label: 'Nueva Orden', icon: HiOutlinePlus, color: 'from-green-400 to-emerald-500' },
   { path: '/beneficiarios', label: 'Beneficiarios', icon: HiOutlineUserGroup, color: 'from-orange-400 to-amber-500' },
+  { path: '/cuentas-bc', label: 'Cuentas BC', icon: HiOutlineBuildingLibrary, color: 'from-teal-400 to-cyan-600', adminOnly: true },
   { path: '/configuracion', label: 'Configuración', icon: HiOutlineCog6Tooth, color: 'from-blue-400 to-indigo-500' },
   { path: '/auditoria', label: 'Auditoría', icon: HiOutlineShieldCheck, color: 'from-red-400 to-rose-500' },
 ];
@@ -81,6 +83,7 @@ export default function Layout({ children }) {
         <nav className="flex-1 px-2 pb-2 space-y-0.5 overflow-y-auto">
           {menuItems.map((item) => {
             if (item.path === '/configuracion' && user.rol !== 'admin') return null;
+            if (item.path === '/cuentas-bc' && user.rol !== 'admin') return null;
             if (item.path === '/auditoria' && !['admin', 'auditor'].includes(user.rol)) return null;
             if (item.path === '/ordenes-pago/nueva' && !['admin', 'financiero'].includes(user.rol)) return null;
 
