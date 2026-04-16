@@ -143,12 +143,13 @@ export default function Configuracion() {
       pollCount++;
       try {
         const statusRes = await api.get('/configuracion/restore-status');
-        const data = statusRes.data.data;
+        const data = statusRes.data?.data || statusRes.data || {};
+        if (!data.status) return;
         setRestoreProgress({
-          status: data.status,
-          progress: data.progress,
+          status: data.status || 'restoring',
+          progress: Number.isFinite(Number(data.progress)) ? Number(data.progress) : 0,
           logs: data.logs || [],
-          elapsedSeconds: data.elapsedSeconds,
+          elapsedSeconds: Number.isFinite(Number(data.elapsedSeconds)) ? Number(data.elapsedSeconds) : 0,
         });
         
         // Si está completado o error, detener polling
@@ -177,7 +178,7 @@ export default function Configuracion() {
       toast.error(errorMsg);
       setRestoring(false);
       clearInterval(pollInterval);
-      console.error('Restore error:', err.response?.data);
+      console.error('Restore error:', err.response?.data || err.message || err);
     }
   };
 
