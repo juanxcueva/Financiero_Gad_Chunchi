@@ -124,39 +124,66 @@ export default function Configuracion() {
 
   const restoreDatabase = async () => {
     if (!restoreFile) return toast.error('Seleccione un archivo SQL');
-    
-    // Confirmación explícita
+
     const confirmed = window.confirm(
       '⚠️ ADVERTENCIA: Esto eliminará todos los datos actuales y los reemplazará con los del respaldo.\n\n¿Está seguro de que desea continuar?'
     );
     if (!confirmed) return;
-    
+
     const formData = new FormData();
     formData.append('backupFile', restoreFile);
-    
+
     setRestoring(true);
     setRestoreProgress({ status: 'restoring', progress: 0, logs: [], elapsedSeconds: 0 });
-    
-    // Polling más agresivo
-    let pollCount = 0;
+
+    // Paso 1 — Iniciar la restauración en el servidor
+    let restoreStartedAt;
+    try {
+      const response = await api.post('/configuracion/restore', formData, {
+        // Sin timeout largo — el servidor responde inmediatamente (async background)
+        timeout: 30000,
+      });
+      restoreStartedAt = Date.now();
+      toast.info(response.data.message || 'Restauración iniciada...');
+      setRestoreFile(null);
+    } catch (err) {
+      // El POST falló → mostramos error y salimos (sin polling)
+      const errorMsg = err.response?.data?.error || 'Error al iniciar restauración';
+      toast.error(errorMsg);
+      setRestoring(false);
+      setRestoreProgress({ status: 'idle', progress: 0, logs: [], elapsedSeconds: 0 });
+      console.error('Restore error:', err.response?.data || err.message || err);
+      return;
+    }
+
+    // Paso 2 — Polling solo si el POST tuvo éxito
     const pollInterval = setInterval(async () => {
-      pollCount++;
       try {
         const statusRes = await api.get('/configuracion/restore-status');
         const data = statusRes.data?.data || statusRes.data || {};
-        if (!data.status) return;
+
+        // Ignorar estado si no hay status válido
+        if (!data.status || data.status === 'idle') return;
+
+        // Ignorar estado antiguo: si el servidor reporta un startTime anterior
+        // a cuando nosotros iniciamos esta restauración, es del run anterior.
+        if (data.startTime) {
+          const serverStart = new Date(data.startTime).getTime();
+          // Dar 5 segundos de margen para que el servidor inicialice el estado
+          if (serverStart < restoreStartedAt - 5000) return;
+        }
+
         setRestoreProgress({
           status: data.status || 'restoring',
           progress: Number.isFinite(Number(data.progress)) ? Number(data.progress) : 0,
           logs: data.logs || [],
           elapsedSeconds: Number.isFinite(Number(data.elapsedSeconds)) ? Number(data.elapsedSeconds) : 0,
         });
-        
-        // Si está completado o error, detener polling
+
         if (data.status === 'completed' || data.status === 'error') {
           clearInterval(pollInterval);
           setRestoring(false);
-          
+
           if (data.status === 'completed') {
             toast.success('✓ Restauración completada. Recargando...');
             setTimeout(() => window.location.reload(), 1500);
@@ -167,20 +194,20 @@ export default function Configuracion() {
       } catch (err) {
         console.error('Error fetching restore status:', err);
       }
-    }, 300); // Poll cada 300ms para actualización más rápida
-    
-    try {
-      const response = await api.post('/configuracion/restore', formData);
-      toast.info(response.data.message || 'Restauración iniciada...');
-      setRestoreFile(null);
-    } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Error al iniciar restauración';
-      toast.error(errorMsg);
-      setRestoring(false);
+    }, 500);
+
+    // Timeout de seguridad: si en 10 minutos no terminó, detener polling
+    setTimeout(() => {
       clearInterval(pollInterval);
-      console.error('Restore error:', err.response?.data || err.message || err);
-    }
+      setRestoring((prev) => {
+        if (prev) {
+          toast.error('Tiempo de espera agotado. Revise el estado del servidor.');
+        }
+        return false;
+      });
+    }, 10 * 60 * 1000);
   };
+
 
   const currentOrLastMigration = migrationState.current || migrationState.last;
   const progress = currentOrLastMigration?.progress;

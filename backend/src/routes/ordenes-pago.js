@@ -210,11 +210,20 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
     } = req.body;
 
     const isAdmin = req.user?.rol === 'admin';
-    // Obtener siguiente número
-    const numResult = await client.query(
-      "SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_orden' FOR UPDATE"
-    );
-    const numOrden = parseInt(numResult.rows[0].valor);
+    // Leer la secuencia y auto-curar si está desfasada con la BD real.
+    // GREATEST garantiza un numero_orden libre incluso si la secuencia quedó
+    // atrás después de una restauración o migración.
+    const numResult = await client.query(`
+      SELECT
+        GREATEST(
+          CAST(c.valor AS BIGINT),
+          COALESCE((SELECT MAX(op.numero_orden) + 1 FROM financiero.ordenes_pago op), 1)
+        )::INT AS num_orden
+      FROM financiero.configuracion c
+      WHERE c.clave = 'siguiente_numero_orden'
+      FOR UPDATE
+    `);
+    const numOrden = parseInt(numResult.rows[0].num_orden);
 
 
     // Obtener siguiente cheque por Cuenta BC (ya no depende de codigo_banco)
