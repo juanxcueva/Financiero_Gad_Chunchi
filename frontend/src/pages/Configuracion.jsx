@@ -32,6 +32,7 @@ export default function Configuracion() {
   const [backupLoading, setBackupLoading] = useState(false);
   const [restoreFile, setRestoreFile] = useState(null);
   const [restoreing, setRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState({ status: 'idle', progress: 0, logs: [], elapsedSeconds: 0 });
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
   const fetchAll = async () => {
@@ -134,6 +135,28 @@ export default function Configuracion() {
     formData.append('backupFile', restoreFile);
     
     setRestoring(true);
+    setRestoreProgress({ status: 'restoring', progress: 0, logs: [], elapsedSeconds: 0 });
+    
+    // Iniciar polling de progreso
+    const pollInterval = setInterval(async () => {
+      try {
+        const statusRes = await api.get('/configuracion/restore-status');
+        const data = statusRes.data.data;
+        setRestoreProgress({
+          status: data.status,
+          progress: data.progress,
+          logs: data.logs || [],
+          elapsedSeconds: data.elapsedSeconds,
+        });
+        
+        if (data.status === 'completed' || data.status === 'error') {
+          clearInterval(pollInterval);
+        }
+      } catch (err) {
+        console.error('Error fetching restore status:', err);
+      }
+    }, 500); // Poll cada 500ms
+    
     try {
       const response = await api.post('/configuracion/restore', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -141,9 +164,11 @@ export default function Configuracion() {
       toast.success(response.data.message || 'Base de datos restaurada correctamente');
       setRestoreFile(null);
       
-      // Recargar después de 2 segundos para que los datos se sincronicen
+      // Esperar a que el status sea 'completed' o 'error' antes de recargar
       setTimeout(() => {
-        window.location.reload();
+        if (restoreProgress.status === 'completed') {
+          window.location.reload();
+        }
       }, 2000);
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Error restaurando la base de datos';
@@ -151,6 +176,7 @@ export default function Configuracion() {
       console.error('Restore error:', err.response?.data);
     } finally {
       setRestoring(false);
+      clearInterval(pollInterval);
     }
   };
 
@@ -596,7 +622,8 @@ export default function Configuracion() {
                   type="file"
                   accept=".sql"
                   onChange={(e) => setRestoreFile(e.target.files?.[0] || null)}
-                  className="input-field text-sm"
+                  disabled={restoreing}
+                  className="input-field text-sm disabled:opacity-50"
                 />
                 <button
                   onClick={restoreDatabase}
@@ -606,6 +633,63 @@ export default function Configuracion() {
                   {restoreing ? 'Restaurando...' : 'Restaurar Base de Datos'}
                 </button>
               </div>
+              
+              {/* Barra de progreso y logs */}
+              {restoreProgress.status !== 'idle' && (
+                <div className="rounded-xl p-4 bg-gray-100/80 dark:bg-white/5 text-sm space-y-3 mt-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-gray-600 dark:text-gray-400">Progreso</span>
+                      <span className="text-xs font-semibold text-gray-900 dark:text-white">{restoreProgress.progress}%</span>
+                      {restoreProgress.elapsedSeconds > 0 && (
+                        <span className="text-xs text-gray-500">({restoreProgress.elapsedSeconds}s)</span>
+                      )}
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-gray-200 dark:bg-white/10 overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          restoreProgress.status === 'completed'
+                            ? 'bg-gradient-to-r from-green-400 to-emerald-500'
+                            : restoreProgress.status === 'error'
+                            ? 'bg-gradient-to-r from-red-400 to-red-500'
+                            : 'bg-gradient-to-r from-cyan-400 to-blue-500'
+                        }`}
+                        style={{ width: `${restoreProgress.progress}%` }}
+                      />
+                    </div>
+                  </div>
+                  
+                  {/* Status badge */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-600 dark:text-gray-400">Estado:</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      restoreProgress.status === 'completed'
+                        ? 'bg-green-500/20 text-green-400'
+                        : restoreProgress.status === 'error'
+                        ? 'bg-red-500/20 text-red-400'
+                        : 'bg-cyan-500/20 text-cyan-400'
+                    }`}>
+                      {restoreProgress.status === 'restoring' && '◌ Restaurando...'}
+                      {restoreProgress.status === 'completed' && '✓ Completado'}
+                      {restoreProgress.status === 'error' && '✗ Error'}
+                      {restoreProgress.status === 'idle' && 'Listo'}
+                    </span>
+                  </div>
+                  
+                  {/* Logs viewer */}
+                  {restoreProgress.logs.length > 0 && (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-xs text-cyan-500 hover:text-cyan-400">
+                        Ver logs ({restoreProgress.logs.length} líneas)
+                      </summary>
+                      <pre className="mt-2 max-h-64 overflow-auto text-[11px] p-2 rounded bg-gray-200/70 dark:bg-black/30 text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-mono">
+                        {restoreProgress.logs.slice(-100).join('\n')}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+              )}
+              
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                 ⚠️ Advertencia: La restauración reemplazará todos los datos actuales.
               </p>

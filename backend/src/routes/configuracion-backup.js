@@ -13,6 +13,17 @@ const execAsync = promisify(exec);
 const BACKUP_DIR = path.join(__dirname, '..', '..', '..', 'uploads', 'backups');
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
+// Estado de restauración en memoria
+const restoreState = {
+  isRestoring: false,
+  logs: [],
+  progress: 0,
+  status: 'idle', // idle, restoring, completed, error
+  error: null,
+  startTime: null,
+  endTime: null,
+};
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, BACKUP_DIR),
@@ -69,6 +80,23 @@ router.get('/backup', authMiddleware, roleMiddleware('admin'), asyncHandler(asyn
   }
 }));
 
+// GET /api/configuracion/restore-status
+router.get('/restore-status', authMiddleware, roleMiddleware('admin'), (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      isRestoring: restoreState.isRestoring,
+      status: restoreState.status,
+      progress: restoreState.progress,
+      logs: restoreState.logs.slice(-50), // Últimas 50 líneas
+      error: restoreState.error,
+      startTime: restoreState.startTime,
+      endTime: restoreState.endTime,
+      elapsedSeconds: restoreState.startTime ? Math.floor((Date.now() - new Date(restoreState.startTime)) / 1000) : 0,
+    },
+  });
+});
+
 // POST /api/configuracion/restore
 router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next) => {
   upload.single('backupFile')(req, res, (err) => {
@@ -98,6 +126,15 @@ router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next
       PGPASSWORD: process.env.DB_PASSWORD || '',
     };
 
+    // Inicializar estado de restauración
+    restoreState.isRestoring = true;
+    restoreState.status = 'restoring';
+    restoreState.logs = [];
+    restoreState.progress = 0;
+    restoreState.error = null;
+    restoreState.startTime = new Date().toISOString();
+    restoreState.endTime = null;
+
     // Crear archivo de restauración con limpieza explícita
     const fsPromise = require('fs').promises;
     const backupContent = await fsPromise.readFile(req.file.path, 'utf8');
@@ -106,37 +143,122 @@ router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next
     const cleanupSQL = `DROP SCHEMA IF EXISTS financiero CASCADE;\n`;
     const finalSQL = backupContent.includes('DROP SCHEMA') ? backupContent : cleanupSQL + backupContent;
     
+    const totalLines = finalSQL.split('\n').length;
+    
     const cleanupFile = path.join(BACKUP_DIR, `restore_${Date.now()}.sql`);
     await fsPromise.writeFile(cleanupFile, finalSQL, 'utf8');
 
-    // Ejecutar restore con archivo limpio
-    const restoreCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -v ON_ERROR_STOP=1 -f "${cleanupFile}" 2>&1`;
+    restoreState.logs.push(`[INFO] Archivo backup: ${req.file.originalname || 'backup.sql'}`);
+    restoreState.logs.push(`[INFO] Tamaño: ${(req.file.size / 1024 / 1024).toFixed(2)} MB`);
+    restoreState.logs.push(`[INFO] Total de líneas: ${totalLines}`);
+    restoreState.logs.push(`[INFO] Limpieza y restauración iniciadas...`);
+    restoreState.logs.push('');
 
-    const { stdout, stderr } = await execAsync(restoreCmd, { env, shell: '/bin/bash', maxBuffer: 50 * 1024 * 1024 });
+    // Ejecutar restore con captura de salida
+    const { spawn } = require('child_process');
     
-    // Log para debugging
-    if (stdout) console.log('Restore output:', stdout.slice(-500));
-    if (stderr) console.log('Restore stderr:', stderr.slice(-500));
-    
-    // Limpiar archivo temporal
-    await fsPromise.unlink(cleanupFile).catch(() => {});
+    return new Promise((resolve, reject) => {
+      const psql = spawn('psql', [
+        '-h', dbConfig.host,
+        '-p', String(dbConfig.port),
+        '-U', dbConfig.user,
+        '-d', dbConfig.database,
+        '-v', 'ON_ERROR_STOP=1',
+        '-f', cleanupFile,
+      ], {
+        env: { ...process.env, PGPASSWORD: process.env.DB_PASSWORD || '' },
+      });
 
-    fs.unlink(req.file.path, () => {});
+      let lineCount = 0;
+      const processOutput = (data, isError = false) => {
+        const lines = data.toString().split('\n');
+        lines.forEach(line => {
+          if (line.trim()) {
+            lineCount++;
+            const prefix = isError ? '[ERROR]' : '[LOG]';
+            restoreState.logs.push(`${prefix} ${line}`);
+            restoreState.progress = Math.min(100, Math.floor((lineCount / Math.max(totalLines, 100)) * 100));
+          }
+        });
+      };
 
-    // Agregar headers para invalidar caché del cliente
-    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.set('Pragma', 'no-cache');
-    res.set('Expires', '0');
-    res.json({ success: true, message: 'Base de datos restaurada correctamente. Recargue la página para ver los cambios.' });
+      psql.stdout.on('data', (data) => processOutput(data, false));
+      psql.stderr.on('data', (data) => processOutput(data, true));
+
+      psql.on('close', async (code) => {
+        restoreState.endTime = new Date().toISOString();
+        
+        // Limpiar archivo temporal
+        await fsPromise.unlink(cleanupFile).catch(() => {});
+        fs.unlink(req.file.path, () => {});
+
+        if (code === 0) {
+          restoreState.status = 'completed';
+          restoreState.progress = 100;
+          restoreState.logs.push('');
+          restoreState.logs.push('[SUCCESS] ✓ Restauración completada exitosamente');
+          restoreState.isRestoring = false;
+
+          res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.set('Pragma', 'no-cache');
+          res.set('Expires', '0');
+          res.json({ 
+            success: true, 
+            message: 'Base de datos restaurada correctamente. Recargue la página para ver los cambios.',
+            logsUrl: '/api/configuracion/restore-status'
+          });
+          resolve();
+        } else {
+          restoreState.status = 'error';
+          restoreState.error = `Proceso psql finalizó con código ${code}`;
+          restoreState.logs.push('');
+          restoreState.logs.push(`[ERROR] ✗ Restauración falló con código ${code}`);
+          restoreState.isRestoring = false;
+
+          res.status(500).json({ 
+            success: false, 
+            error: `Error en restauración: ${restoreState.error}`,
+            logsUrl: '/api/configuracion/restore-status'
+          });
+          reject(new Error(`psql exited with code ${code}`));
+        }
+      });
+
+      psql.on('error', (err) => {
+        restoreState.status = 'error';
+        restoreState.error = err.message;
+        restoreState.endTime = new Date().toISOString();
+        restoreState.isRestoring = false;
+        restoreState.logs.push(`[ERROR] ${err.message}`);
+
+        res.status(500).json({ 
+          success: false, 
+          error: `Error ejecutando restauración: ${err.message}`,
+          logsUrl: '/api/configuracion/restore-status'
+        });
+        reject(err);
+      });
+    });
   } catch (err) {
-    console.error('Error restaurando backup:', err.message, err.stderr || '');\n    if (req.file) {
+    console.error('Error restaurando backup:', err.message);
+    
+    restoreState.status = 'error';
+    restoreState.error = err.message;
+    restoreState.endTime = new Date().toISOString();
+    restoreState.isRestoring = false;
+    restoreState.logs.push(`[ERROR] ${err.message}`);
+    
+    if (req.file) {
       fs.unlink(req.file.path, () => {});
     }
     
-    // Mensajes de error específicos para restauración
     let errorMsg = 'Error restaurando: ' + err.message;
-    if (err.stderr?.includes('ERROR')) {
-      const errorLine = err.stderr.split('\\n').find(l => l.includes('ERROR'));\n      errorMsg = 'Error en SQL: ' + (errorLine || err.stderr.slice(0, 100));\n    } else if (err.message?.includes('ENOENT')) {\n      errorMsg = 'Error: Archivo de respaldo no encontrado o acceso denegado';\n    }\n    \n    res.status(500).json({ success: false, error: errorMsg });\n  }
+    if (err.message?.includes('ENOENT')) {
+      errorMsg = 'Error: Archivo de respaldo no encontrado o acceso denegado';
+    }
+    
+    res.status(500).json({ success: false, error: errorMsg });
+  }
 }));
 
 module.exports = router;
