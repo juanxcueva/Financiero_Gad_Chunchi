@@ -29,6 +29,9 @@ export default function Configuracion() {
   const [accessFile, setAccessFile] = useState(null);
   const [uploadingAccess, setUploadingAccess] = useState(false);
   const [migrationState, setMigrationState] = useState({ current: null, last: null });
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [restoreFile, setRestoreFile] = useState(null);
+  const [restoreing, setRestoring] = useState(false);
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
   const fetchAll = async () => {
@@ -95,6 +98,46 @@ export default function Configuracion() {
       toast.error(err.response?.data?.error || 'Error iniciando migración');
     } finally {
       setUploadingAccess(false);
+    }
+  };
+
+  const downloadBackup = async () => {
+    setBackupLoading(true);
+    try {
+      const response = await api.get('/configuracion/backup', { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      const filename = response.headers['content-disposition']?.split('filename=')[1]?.replace(/"/g, '') || 'backup.sql';
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success('Backup descargado correctamente');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Error descargando backup');
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const restoreDatabase = async () => {
+    if (!restoreFile) return toast.error('Seleccione un archivo SQL');
+    
+    const formData = new FormData();
+    formData.append('backupFile', restoreFile);
+    
+    setRestoring(true);
+    try {
+      const response = await api.post('/configuracion/restore', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success(response.data.message || 'Base de datos restaurada correctamente');
+      setRestoreFile(null);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Error restaurando la base de datos');
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -514,6 +557,46 @@ export default function Configuracion() {
                 </pre>
               </details>
             )}
+          </div>
+        </Section>
+      )}
+
+      {/* Backup y Restauración */}
+      {currentUser.rol === 'admin' && (
+        <Section icon={HiOutlineArrowUpTray} title="Backup y Restauración">
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 dark:text-white mb-2">Descargar Backup</h3>
+              <button
+                onClick={downloadBackup}
+                disabled={backupLoading}
+                className="btn-primary text-sm disabled:opacity-50"
+              >
+                {backupLoading ? 'Generando...' : 'Descargar Backup'}
+              </button>
+            </div>
+
+            <div className="border-t border-gray-200 dark:border-white/5 pt-4">
+              <h3 className="text-sm font-medium text-gray-900 dark:text-white mb-2">Restaurar Base de Datos</h3>
+              <div className="flex flex-col gap-3">
+                <input
+                  type="file"
+                  accept=".sql"
+                  onChange={(e) => setRestoreFile(e.target.files?.[0] || null)}
+                  className="input-field text-sm"
+                />
+                <button
+                  onClick={restoreDatabase}
+                  disabled={!restoreFile || restoreing}
+                  className="btn-primary text-sm disabled:opacity-50"
+                >
+                  {restoreing ? 'Restaurando...' : 'Restaurar Base de Datos'}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                ⚠️ Advertencia: La restauración reemplazará todos los datos actuales.
+              </p>
+            </div>
           </div>
         </Section>
       )}
