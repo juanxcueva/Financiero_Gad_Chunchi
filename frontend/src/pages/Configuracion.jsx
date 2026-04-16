@@ -144,7 +144,7 @@ export default function Configuracion() {
         timeout: 30000,
       });
       restoreStartedAt = Date.now();
-      toast.info(response.data.message || 'Restauración iniciada...');
+      toast(response.data.message || 'Restauración iniciada en segundo plano...');
       setRestoreFile(null);
     } catch (err) {
       // El POST falló → mostramos error y salimos (sin polling)

@@ -210,21 +210,22 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
     } = req.body;
 
     const isAdmin = req.user?.rol === 'admin';
-    // Leer la secuencia y auto-curar si está desfasada con la BD real.
-    // GREATEST garantiza un numero_orden libre incluso si la secuencia quedó
-    // atrás después de una restauración o migración.
-    const numResult = await client.query(`
-      SELECT
-        GREATEST(
-          CAST(c.valor AS BIGINT),
-          COALESCE((SELECT MAX(op.numero_orden) + 1 FROM financiero.ordenes_pago op), 1)
-        )::INT AS num_orden
-      FROM financiero.configuracion c
-      WHERE c.clave = 'siguiente_numero_orden'
-      FOR UPDATE
-    `);
-    const numOrden = parseInt(numResult.rows[0].num_orden);
 
+    // ── Número de orden: auto-curar secuencia ─────────────────────────────────
+    // 1) Bloquear la fila de secuencia (FOR UPDATE serializa peticiones concurrentes)
+    const lockResult = await client.query(
+      "SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_orden' FOR UPDATE"
+    );
+    const storedNumOrden = parseInt(lockResult.rows[0]?.valor) || 1;
+
+    // 2) Obtener el MAX real de la tabla (fuera de FOR UPDATE para evitar problemas de sintaxis)
+    const maxOrdenResult = await client.query(
+      'SELECT COALESCE(MAX(numero_orden), 0) AS max_orden FROM financiero.ordenes_pago'
+    );
+    const maxNumOrden = parseInt(maxOrdenResult.rows[0]?.max_orden) || 0;
+
+    // 3) Usar el mayor entre el valor almacenado y el max real +1 (auto-curar desfase)
+    const numOrden = Math.max(storedNumOrden, maxNumOrden + 1);
 
     // Obtener siguiente cheque por Cuenta BC (ya no depende de codigo_banco)
     const ivaConfig = await client.query("SELECT valor FROM financiero.configuracion WHERE clave = 'iva_porcentaje'");
@@ -238,6 +239,7 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       String(chequeEditConfig.rows[0]?.valor || '').toLowerCase()
     );
 
+    // ── Número de cheque: auto-curar + auto-avanzar ───────────────────────────
     let numCheque = null;
     if (selectedCuentaBC) {
       const cuentaBcResult = await client.query(
@@ -250,7 +252,7 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       if (cuentaBcResult.rows.length > 0) {
         numCheque = parseInt(cuentaBcResult.rows[0].siguiente_numero_transfer) || 1;
 
-        // Alinear sugerido con el ultimo cheque realmente usado para esa Cuenta BC.
+        // Alinear con el último cheque realmente usado
         const maxChequeResult = await client.query(
           `SELECT COALESCE(MAX(CAST(cheque_numero AS BIGINT)), 0) AS max_cheque
            FROM financiero.ordenes_pago
@@ -265,7 +267,7 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       }
     }
 
-    // Fallback global solo si no existe catalogo para la Cuenta BC
+    // Fallback global si no existe catálogo para la Cuenta BC
     if (!numCheque) {
       const numChequeResult = await client.query(
         "SELECT valor FROM financiero.configuracion WHERE clave = 'siguiente_numero_cheque' FOR UPDATE"
@@ -273,13 +275,10 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       numCheque = parseInt(numChequeResult.rows[0]?.valor) || 1;
     }
 
-    // Solo admin puede forzar un numero de cheque manual.
-    const suggestedChequeNum = String(numCheque);
     const requestedChequeNum = cheque_numero ? String(cheque_numero).trim() : '';
-    const isManualChequeOverride = isAdmin && permitirEditarCheque && requestedChequeNum && requestedChequeNum !== suggestedChequeNum;
-    const finalChequeNum = isManualChequeOverride ? requestedChequeNum : suggestedChequeNum;
+    const isManualChequeOverride = isAdmin && permitirEditarCheque && requestedChequeNum && requestedChequeNum !== String(numCheque);
 
-    if (isAdmin && requestedChequeNum && requestedChequeNum !== suggestedChequeNum && !permitirEditarCheque) {
+    if (isAdmin && requestedChequeNum && requestedChequeNum !== String(numCheque) && !permitirEditarCheque) {
       await client.query('ROLLBACK');
       return res.status(403).json({
         success: false,
@@ -287,36 +286,41 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       });
     }
 
-    if (selectedCuentaBC && finalChequeNum && finalChequeNum !== '0') {
-      const chequeDuplicado = await client.query(
+    // ── Resolver número de cheque final ──────────────────────────────────────
+    let finalChequeNum;
+    if (isManualChequeOverride) {
+      // Admin forzó un número: verificar que no exista
+      const dup = await client.query(
         `SELECT id FROM financiero.ordenes_pago
-         WHERE cuenta_banco_central = $1 AND cheque_numero = $2
-         LIMIT 1`,
-        [selectedCuentaBC, finalChequeNum]
+         WHERE cuenta_banco_central = $1 AND cheque_numero = $2 LIMIT 1`,
+        [selectedCuentaBC, requestedChequeNum]
       );
-      if (chequeDuplicado.rows.length > 0) {
-        await registrarAuditoria({
-          tabla: 'ordenes_pago',
-          registro_id: null,
-          accion: isManualChequeOverride ? 'CONFLICTO_CHEQUE_MANUAL' : 'CONFLICTO_CHEQUE_AUTOMATICO',
-          datos_anteriores: null,
-          datos_nuevos: {
-            cuenta_banco_central: selectedCuentaBC,
-            cheque_numero_intentado: finalChequeNum,
-            orden_conflictiva_id: chequeDuplicado.rows[0].id,
-          },
-          usuario_id: req.user.id,
-          usuario_nombre: req.user.nombre_completo,
-          ip_address: req.ip,
-        });
-
+      if (dup.rows.length > 0) {
         await client.query('ROLLBACK');
         return res.status(409).json({
           success: false,
-          error: `Conflicto de secuencial: el cheque ${finalChequeNum} ya existe para la Cuenta BC ${selectedCuentaBC}. Revise el secuencial antes de continuar.`,
+          error: `El cheque ${requestedChequeNum} ya existe para la Cuenta BC ${selectedCuentaBC}`,
         });
       }
+      finalChequeNum = requestedChequeNum;
+    } else if (selectedCuentaBC && numCheque) {
+      // Automático: avanzar hasta encontrar un número libre (auto-curar duplicados)
+      let probe = numCheque;
+      for (let i = 0; i < 1000; i++) {
+        const dup = await client.query(
+          `SELECT id FROM financiero.ordenes_pago
+           WHERE cuenta_banco_central = $1 AND cheque_numero = $2 LIMIT 1`,
+          [selectedCuentaBC, String(probe)]
+        );
+        if (dup.rows.length === 0) break;
+        probe++;
+      }
+      finalChequeNum = String(probe);
+      numCheque = probe; // actualizar para que el UPDATE de secuencia sea correcto
+    } else {
+      finalChequeNum = String(numCheque || '0');
     }
+
 
     const pctIva = porcentaje_iva !== undefined ? parseFloat(porcentaje_iva) : parseFloat(ivaConfig.rows[0]?.valor || '15');
     const valPlanilla = parseFloat(valor_planilla) || 0;
