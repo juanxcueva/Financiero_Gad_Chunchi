@@ -9,7 +9,7 @@ const router = express.Router();
 
 const ROOT_DIR = path.join(__dirname, '..', '..', '..');
 const UPLOAD_DIR = path.join(ROOT_DIR, 'uploads', 'access');
-const IMPORT_SCRIPT = path.join(ROOT_DIR, 'database', 'importar_access_samba.sh');
+const IMPORT_SCRIPT = path.join(ROOT_DIR, 'database', 'migracion_completa.sh');
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 

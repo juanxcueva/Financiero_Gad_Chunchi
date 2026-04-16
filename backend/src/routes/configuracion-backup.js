@@ -48,9 +48,12 @@ router.get('/backup', authMiddleware, roleMiddleware('admin'), asyncHandler(asyn
       PGPASSWORD: process.env.DB_PASSWORD || '',
     };
 
-    const dumpCmd = `pg_dump -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} > "${backupFile}"`;
+    const dumpCmd = `pg_dump --no-acl --no-owner -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database}`;
 
-    await execAsync(dumpCmd, { env, shell: '/bin/bash' });
+    const { stdout } = await execAsync(dumpCmd, { env, shell: '/bin/bash', maxBuffer: 50 * 1024 * 1024 });
+    
+    // Escribir el backup sin líneas de restricción o comentarios problemáticos
+    fs.writeFileSync(backupFile, stdout);
 
     const filename = `backup_${new Date().toISOString().split('T')[0]}_${Date.now()}.sql`;
     res.download(backupFile, filename, (err) => {
@@ -95,8 +98,12 @@ router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next
       PGPASSWORD: process.env.DB_PASSWORD || '',
     };
 
+    // Limpiar primero: DROP SCHEMA financiero CASCADE (esto elimina todos los datos)
+    const dropCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS financiero CASCADE"`;
+    await execAsync(dropCmd, { env, shell: '/bin/bash', maxBuffer: 50 * 1024 * 1024 });
+
     // Ejecutar restore
-    const restoreCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} < "${req.file.path}"`;
+    const restoreCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -v ON_ERROR_STOP=1 < "${req.file.path}"`;
 
     await execAsync(restoreCmd, { env, shell: '/bin/bash', maxBuffer: 50 * 1024 * 1024 });
 
