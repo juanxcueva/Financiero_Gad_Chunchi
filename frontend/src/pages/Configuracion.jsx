@@ -137,8 +137,10 @@ export default function Configuracion() {
     setRestoring(true);
     setRestoreProgress({ status: 'restoring', progress: 0, logs: [], elapsedSeconds: 0 });
     
-    // Iniciar polling de progreso
+    // Polling más agresivo
+    let pollCount = 0;
     const pollInterval = setInterval(async () => {
+      pollCount++;
       try {
         const statusRes = await api.get('/configuracion/restore-status');
         const data = statusRes.data.data;
@@ -149,34 +151,35 @@ export default function Configuracion() {
           elapsedSeconds: data.elapsedSeconds,
         });
         
+        // Si está completado o error, detener polling
         if (data.status === 'completed' || data.status === 'error') {
           clearInterval(pollInterval);
+          setRestoring(false);
+          
+          if (data.status === 'completed') {
+            toast.success('✓ Restauración completada. Recargando...');
+            setTimeout(() => window.location.reload(), 1500);
+          } else {
+            toast.error('✗ Restauración falló: ' + (data.error || 'Error desconocido'));
+          }
         }
       } catch (err) {
         console.error('Error fetching restore status:', err);
       }
-    }, 500); // Poll cada 500ms
+    }, 300); // Poll cada 300ms para actualización más rápida
     
     try {
       const response = await api.post('/configuracion/restore', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      toast.success(response.data.message || 'Base de datos restaurada correctamente');
+      toast.info(response.data.message || 'Restauración iniciada...');
       setRestoreFile(null);
-      
-      // Esperar a que el status sea 'completed' o 'error' antes de recargar
-      setTimeout(() => {
-        if (restoreProgress.status === 'completed') {
-          window.location.reload();
-        }
-      }, 2000);
     } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Error restaurando la base de datos';
+      const errorMsg = err.response?.data?.error || 'Error al iniciar restauración';
       toast.error(errorMsg);
-      console.error('Restore error:', err.response?.data);
-    } finally {
       setRestoring(false);
       clearInterval(pollInterval);
+      console.error('Restore error:', err.response?.data);
     }
   };
 
