@@ -98,25 +98,45 @@ router.post('/restore', authMiddleware, roleMiddleware('admin'), (req, res, next
       PGPASSWORD: process.env.DB_PASSWORD || '',
     };
 
-    // Limpiar primero: DROP SCHEMA financiero CASCADE (esto elimina todos los datos)
-    const dropCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS financiero CASCADE"`;
-    await execAsync(dropCmd, { env, shell: '/bin/bash', maxBuffer: 50 * 1024 * 1024 });
+    // Crear archivo de restauración con limpieza explícita
+    const fsPromise = require('fs').promises;
+    const backupContent = await fsPromise.readFile(req.file.path, 'utf8');
+    
+    // Agregar limpieza al principio del SQL si no existe
+    const cleanupSQL = `DROP SCHEMA IF EXISTS financiero CASCADE;\n`;
+    const finalSQL = backupContent.includes('DROP SCHEMA') ? backupContent : cleanupSQL + backupContent;
+    
+    const cleanupFile = path.join(BACKUP_DIR, `restore_${Date.now()}.sql`);
+    await fsPromise.writeFile(cleanupFile, finalSQL, 'utf8');
 
-    // Ejecutar restore
-    const restoreCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -v ON_ERROR_STOP=1 < "${req.file.path}"`;
+    // Ejecutar restore con archivo limpio
+    const restoreCmd = `psql -h ${dbConfig.host} -p ${dbConfig.port} -U ${dbConfig.user} -d ${dbConfig.database} -v ON_ERROR_STOP=1 -f "${cleanupFile}" 2>&1`;
 
-    await execAsync(restoreCmd, { env, shell: '/bin/bash', maxBuffer: 50 * 1024 * 1024 });
+    const { stdout, stderr } = await execAsync(restoreCmd, { env, shell: '/bin/bash', maxBuffer: 50 * 1024 * 1024 });
+    
+    // Log para debugging
+    if (stdout) console.log('Restore output:', stdout.slice(-500));
+    if (stderr) console.log('Restore stderr:', stderr.slice(-500));
+    
+    // Limpiar archivo temporal
+    await fsPromise.unlink(cleanupFile).catch(() => {});
 
     fs.unlink(req.file.path, () => {});
 
-    res.json({ success: true, message: 'Base de datos restaurada correctamente' });
+    // Agregar headers para invalidar caché del cliente
+    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.json({ success: true, message: 'Base de datos restaurada correctamente. Recargue la página para ver los cambios.' });
   } catch (err) {
-    console.error('Error restaurando backup:', err);
-    if (req.file) {
+    console.error('Error restaurando backup:', err.message, err.stderr || '');\n    if (req.file) {
       fs.unlink(req.file.path, () => {});
     }
-    res.status(500).json({ success: false, error: 'Error restaurando: ' + err.message });
-  }
+    
+    // Mensajes de error específicos para restauración
+    let errorMsg = 'Error restaurando: ' + err.message;
+    if (err.stderr?.includes('ERROR')) {
+      const errorLine = err.stderr.split('\\n').find(l => l.includes('ERROR'));\n      errorMsg = 'Error en SQL: ' + (errorLine || err.stderr.slice(0, 100));\n    } else if (err.message?.includes('ENOENT')) {\n      errorMsg = 'Error: Archivo de respaldo no encontrado o acceso denegado';\n    }\n    \n    res.status(500).json({ success: false, error: errorMsg });\n  }
 }));
 
 module.exports = router;

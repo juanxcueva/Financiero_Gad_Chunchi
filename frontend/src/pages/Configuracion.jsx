@@ -124,6 +124,12 @@ export default function Configuracion() {
   const restoreDatabase = async () => {
     if (!restoreFile) return toast.error('Seleccione un archivo SQL');
     
+    // Confirmación explícita
+    const confirmed = window.confirm(
+      '⚠️ ADVERTENCIA: Esto eliminará todos los datos actuales y los reemplazará con los del respaldo.\n\n¿Está seguro de que desea continuar?'
+    );
+    if (!confirmed) return;
+    
     const formData = new FormData();
     formData.append('backupFile', restoreFile);
     
@@ -134,8 +140,15 @@ export default function Configuracion() {
       });
       toast.success(response.data.message || 'Base de datos restaurada correctamente');
       setRestoreFile(null);
+      
+      // Recargar después de 2 segundos para que los datos se sincronicen
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Error restaurando la base de datos');
+      const errorMsg = err.response?.data?.error || 'Error restaurando la base de datos';
+      toast.error(errorMsg);
+      console.error('Restore error:', err.response?.data);
     } finally {
       setRestoring(false);
     }

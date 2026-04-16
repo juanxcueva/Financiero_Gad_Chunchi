@@ -466,8 +466,23 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
     });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Error creando orden:', err);
-    res.status(500).json({ success: false, error: 'Error interno' });
+    console.error('Error creando orden:', err.message, err.detail || '', err.code || '');
+    
+    // Mensajes de error más específicos
+    let errorMsg = 'Error interno';
+    if (err.code === '23505') {
+      errorMsg = 'Conflicto: El cheque o número de orden ya existe';
+    } else if (err.code === '23503') {
+      errorMsg = 'Datos inválidos: Referencia a beneficiario o cuenta no existe';
+    } else if (err.code === '22P02') {
+      errorMsg = 'Datos inválidos: Formato incorrecto en números o fechas';
+    } else if (err.message?.includes('Following_numero')) {
+      errorMsg = 'Error: No se puede obtener el siguiente número de orden';
+    } else if (err.message?.includes('cuentas_bc')) {
+      errorMsg = 'Error: Cuenta BC no válida o no configurada';
+    }
+    
+    res.status(500).json({ success: false, error: errorMsg, details: process.env.NODE_ENV === 'development' ? err.message : undefined });
   } finally {
     client.release();
   }
