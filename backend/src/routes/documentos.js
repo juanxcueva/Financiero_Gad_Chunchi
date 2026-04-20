@@ -209,7 +209,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
 <style>
   @page { size: A4; margin: 20mm 15mm; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #000; line-height: 1.4; }
-  .header { text-align: center; margin-top: -8px; margin-bottom: 10px; }
+  .header { text-align: center; margin-top: -14px; margin-bottom: 10px; }
   .header img { width: 100px; margin-bottom: 6px; }
   .header h1 { font-size: 16px; margin: 2px 0; letter-spacing: 1px; }
   .header h2 { font-size: 13px; margin: 2px 0; font-weight: normal; }
@@ -583,7 +583,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
         properties: {
           page: {
             margin: {
-              top: 720,
+              top: 576,
               right: 1134,
               bottom: 1134,
               left: 1134,
