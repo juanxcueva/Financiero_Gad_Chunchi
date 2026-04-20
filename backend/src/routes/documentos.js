@@ -157,6 +157,16 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
     ...firmantes,
   ];
 
+  const cargos = [
+    { r: orden.razon_otros_cargos, v: orden.valor_otros_cargos },
+    { r: orden.razon_otros_cargos_1, v: orden.valor_otros_cargos_1 },
+    { r: orden.razon_otros_cargos_2, v: orden.valor_otros_cargos_2 },
+    { r: orden.razon_otros_cargos_3, v: orden.valor_otros_cargos_3 },
+    { r: orden.razon_otros_cargos_4, v: orden.valor_otros_cargos_4 },
+    { r: orden.razon_otros_cargos_5, v: orden.valor_otros_cargos_5 },
+  ];
+  const otrosCargosRows = cargos.filter(c => c.r && parseFloat(c.v) > 0);
+
   const ivaBase = parseFloat(orden.valor_planilla) || 0;
   const ivaValor = parseFloat(orden.valor_iva) || 0;
   const ivaPorcentaje = ivaBase > 0 ? (ivaValor / ivaBase) * 100 : 0;
@@ -177,6 +187,13 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
       <td class="num value">${formatMoney(r.valor)}</td>
     </tr>`;
     }),
+    ...otrosCargosRows.map(c => `
+    <tr>
+      <td class="concept">${c.r}</td>
+      <td class="num"></td>
+      <td class="num"></td>
+      <td class="num value">${formatMoney(c.v)}</td>
+    </tr>`),
   ].join('');
 
   const preferredCols = getPreferredSignatureColumns(allFirmantes.length);
@@ -201,22 +218,6 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
     const content = row.map((f) => buildFirmaCellHtml(f.cargo, f.nombre, f.identificacion)).join('');
     return `<tr>${leftEmpty}${content}${rightEmpty}</tr>`;
   }).join('');
-
-  // Otros cargos
-  let otrosCargosHtml = '';
-  const cargos = [
-    { r: orden.razon_otros_cargos, v: orden.valor_otros_cargos },
-    { r: orden.razon_otros_cargos_1, v: orden.valor_otros_cargos_1 },
-    { r: orden.razon_otros_cargos_2, v: orden.valor_otros_cargos_2 },
-    { r: orden.razon_otros_cargos_3, v: orden.valor_otros_cargos_3 },
-    { r: orden.razon_otros_cargos_4, v: orden.valor_otros_cargos_4 },
-    { r: orden.razon_otros_cargos_5, v: orden.valor_otros_cargos_5 },
-  ];
-  for (const c of cargos) {
-    if (c.r && parseFloat(c.v) > 0) {
-      otrosCargosHtml += `<tr><td style="padding:1px 8px;">${c.r}</td><td style="text-align:right;padding:1px 8px;">${formatMoney(c.v)}</td></tr>`;
-    }
-  }
 
   return `<!DOCTYPE html>
 <html>
@@ -283,7 +284,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
 
   <div style="display:flex;gap:40px;">
     <div style="flex:1;">
-      ${(retenciones.length > 0 || ivaValor > 0) ? `
+      ${(retenciones.length > 0 || ivaValor > 0 || otrosCargosRows.length > 0) ? `
       <table class="ret-table" style="width:100%;">
         <tr><th>Concepto</th><th>Base</th><th>%</th><th>Valor</th></tr>
         ${detalleTributarioRows}
@@ -476,6 +477,15 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     children.push(valTable);
 
     // IVA + Retenciones (detalle con encabezados claros)
+    const otrosCargosWord = [
+      { r: orden.razon_otros_cargos, v: orden.valor_otros_cargos },
+      { r: orden.razon_otros_cargos_1, v: orden.valor_otros_cargos_1 },
+      { r: orden.razon_otros_cargos_2, v: orden.valor_otros_cargos_2 },
+      { r: orden.razon_otros_cargos_3, v: orden.valor_otros_cargos_3 },
+      { r: orden.razon_otros_cargos_4, v: orden.valor_otros_cargos_4 },
+      { r: orden.razon_otros_cargos_5, v: orden.valor_otros_cargos_5 },
+    ].filter(c => c.r && parseFloat(c.v) > 0);
+
     const ivaBaseWord = parseFloat(orden.valor_planilla) || 0;
     const ivaValorWord = parseFloat(orden.valor_iva) || 0;
     const ivaPorcentajeWord = ivaBaseWord > 0 ? (ivaValorWord / ivaBaseWord) * 100 : 0;
@@ -490,6 +500,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
           formatMoney(r.valor),
         ];
       }),
+      ...otrosCargosWord.map(c => [c.r, '', '', formatMoney(c.v)]),
     ];
 
     if (detalleRowsWord.length > 0) {
@@ -497,7 +508,6 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       const thinBorders = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
 
       children.push(new Paragraph({ children: [] }));
-      children.push(new Paragraph({ children: [new TextRun({ text: 'Detalle de IVA y Retenciones', bold: true, size: 20 })] }));
 
       const detalleTableWord = new Table({
         width: { size: 70, type: WidthType.PERCENTAGE },
