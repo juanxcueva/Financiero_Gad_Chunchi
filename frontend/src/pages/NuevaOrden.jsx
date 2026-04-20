@@ -32,6 +32,10 @@ export default function NuevaOrden() {
   const [generandoDoc, setGenerandoDoc] = useState(null);
   const [downloadProgress, setDownloadProgress] = useState(null);
   const submitLockRef = useRef(false);
+  // Tracks whether the admin explicitly typed a custom cheque number.
+  // When false the backend auto-assigns the next available number,
+  // avoiding stale-form race conditions.
+  const chequeEditadoManualmenteRef = useRef(false);
 
   // Form state
   const [codigoBeneficiario, setCodigoBeneficiario] = useState('');
@@ -59,6 +63,7 @@ export default function NuevaOrden() {
     ]).then(([numRes, configRes, retRes, cuentasRes]) => {
       setNumOrden(numRes.data.data.numero_orden);
       setNumCheque(numRes.data.data.numero_cheque);
+      chequeEditadoManualmenteRef.current = false;
       const cfg = configRes.data.data || {};
       setConfig(cfg);
       setPermitirEditarCheque(['1', 'true', 'si', 'sí', 'yes'].includes(String(cfg.permitir_editar_cheque || '').toLowerCase()));
@@ -77,6 +82,7 @@ export default function NuevaOrden() {
         setCuentaBcSeleccionada(firstCuenta.cuenta_bancaria);
         if (firstCuenta.siguiente_numero_transfer) {
           setNumCheque(String(firstCuenta.siguiente_numero_transfer));
+          chequeEditadoManualmenteRef.current = false;
         }
 
         const firstBank = cuentas.find(c => c.cuenta_bancaria === firstCuenta.cuenta_bancaria);
@@ -267,14 +273,16 @@ export default function NuevaOrden() {
         retenciones: retencionesPayload,
       };
 
-      // Add bank and check number if selected
+      // Only send cheque_numero if the admin explicitly typed a custom value.
+      // When auto-populated from the form load/cuenta-BC change, let the backend
+      // compute the next free number itself to avoid stale-value race conditions.
       if (cuentaBcSeleccionada) {
         body.cuenta_banco_central = cuentaBcSeleccionada;
       }
       if (codigoBancoSeleccionado) {
         body.codigo_banco = codigoBancoSeleccionado;
       }
-      if (isAdmin && permitirEditarCheque && numCheque) {
+      if (isAdmin && permitirEditarCheque && numCheque && chequeEditadoManualmenteRef.current) {
         body.cheque_numero = numCheque;
       }
       if (fechaOrden) {
@@ -358,6 +366,7 @@ export default function NuevaOrden() {
               const cuentaInfo = cuentasCatalogo.find((c) => c.cuenta_bancaria === cuenta);
               if (cuentaInfo?.siguiente_numero_transfer) {
                 setNumCheque(String(cuentaInfo.siguiente_numero_transfer));
+                chequeEditadoManualmenteRef.current = false;
               }
 
               const banco = cuentasBancarias.find((c) => c.cuenta_bancaria === cuenta);
@@ -377,7 +386,10 @@ export default function NuevaOrden() {
           <input
             type="text"
             value={numCheque}
-            onChange={(e) => setNumCheque(e.target.value.toUpperCase())}
+            onChange={(e) => {
+              setNumCheque(e.target.value.toUpperCase());
+              chequeEditadoManualmenteRef.current = true;
+            }}
             className="input-field font-mono text-purple-400 font-bold w-32"
             placeholder="Auto"
             disabled={!isAdmin || !permitirEditarCheque}

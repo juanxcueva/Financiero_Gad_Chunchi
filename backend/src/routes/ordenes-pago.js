@@ -291,20 +291,36 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
     // ── Resolver número de cheque final ──────────────────────────────────────
     let finalChequeNum;
     if (isManualChequeOverride) {
-      // Admin forzó un número: verificar que no exista
+      // Admin forzó un número: si ya existe, avanzar al siguiente libre en lugar
+      // de rechazar con 409, para tolerar valores obsoletos del formulario.
       const dup = await client.query(
         `SELECT id FROM financiero.ordenes_pago
          WHERE cuenta_banco_central = $1 AND cheque_numero = $2 LIMIT 1`,
         [selectedCuentaBC, requestedChequeNum]
       );
       if (dup.rows.length > 0) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({
-          success: false,
-          error: `El cheque ${requestedChequeNum} ya existe para la Cuenta BC ${selectedCuentaBC}`,
-        });
+        // El número solicitado ya está en uso: auto-avanzar desde el siguiente
+        // número del servidor para evitar que un valor obsoleto del formulario
+        // bloquee el guardado.
+        console.warn(
+          `[cheque] Admin solicitó ${requestedChequeNum} pero ya existe. ` +
+          `Auto-avanzando desde ${numCheque}.`
+        );
+        let probe = numCheque;
+        for (let i = 0; i < 1000; i++) {
+          const probeDup = await client.query(
+            `SELECT id FROM financiero.ordenes_pago
+             WHERE cuenta_banco_central = $1 AND cheque_numero = $2 LIMIT 1`,
+            [selectedCuentaBC, String(probe)]
+          );
+          if (probeDup.rows.length === 0) break;
+          probe++;
+        }
+        finalChequeNum = String(probe);
+        numCheque = probe;
+      } else {
+        finalChequeNum = requestedChequeNum;
       }
-      finalChequeNum = requestedChequeNum;
     } else if (selectedCuentaBC && numCheque) {
       // Automático: avanzar hasta encontrar un número libre (auto-curar duplicados)
       let probe = numCheque;
@@ -433,15 +449,17 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
       [String(numOrden + 1)]
     );
 
-    // Incrementar secuencia por Cuenta BC cuando se usa la sugerencia.
-    if (selectedCuentaBC && !isManualChequeOverride) {
+    // Incrementar secuencia por Cuenta BC siempre que se usó el catálogo.
+    // numCheque contiene el número efectivamente asignado (ya sea automático
+    // o el resultado del auto-avance dentro del override manual).
+    if (selectedCuentaBC) {
       await client.query(
         `UPDATE financiero.cuentas_bc_catalogo
          SET siguiente_numero_transfer = $1
          WHERE cuenta_bancaria = $2`,
         [numCheque + 1, selectedCuentaBC]
       );
-    } else if (!selectedCuentaBC) {
+    } else {
       // Fallback global solo por retrocompatibilidad
       await client.query(
         "UPDATE financiero.configuracion SET valor = $1 WHERE clave = 'siguiente_numero_cheque'",
