@@ -33,7 +33,7 @@ router.get('/', authMiddleware, asyncHandler(async (req, res) => {
 }));
 
 // POST /api/cuentas-bc — crear nueva cuenta BC
-router.post('/', authMiddleware, roleMiddleware('admin'), asyncHandler(async (req, res) => {
+router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), asyncHandler(async (req, res) => {
   const { cuenta_bancaria, descripcion_cuenta, siguiente_numero_transfer } = req.body;
 
   if (!cuenta_bancaria || !descripcion_cuenta) {
@@ -65,7 +65,7 @@ router.post('/', authMiddleware, roleMiddleware('admin'), asyncHandler(async (re
 }));
 
 // PUT /api/cuentas-bc/:id — actualizar cuenta BC
-router.put('/:id', authMiddleware, roleMiddleware('admin'), asyncHandler(async (req, res) => {
+router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), asyncHandler(async (req, res) => {
   const { descripcion_cuenta, siguiente_numero_transfer, activo } = req.body;
 
   const existing = await pool.query(
@@ -99,7 +99,7 @@ router.put('/:id', authMiddleware, roleMiddleware('admin'), asyncHandler(async (
 }));
 
 // DELETE /api/cuentas-bc/:id — borrado lógico (activo = false)
-router.delete('/:id', authMiddleware, roleMiddleware('admin'), asyncHandler(async (req, res) => {
+router.delete('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), asyncHandler(async (req, res) => {
   const result = await pool.query(
     'UPDATE financiero.cuentas_bc_catalogo SET activo = false, updated_at = NOW() WHERE id = $1 RETURNING id',
     [req.params.id]

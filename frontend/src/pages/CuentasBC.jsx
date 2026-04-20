@@ -22,7 +22,7 @@ export default function CuentasBC() {
   const [saving, setSaving] = useState(false);
 
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-  const isAdmin = currentUser?.rol === 'admin';
+  const canManage = ['admin', 'financiero'].includes(currentUser?.rol);
 
   const fetchCuentas = async () => {
     try {
@@ -122,7 +122,7 @@ export default function CuentasBC() {
             >
               <HiOutlineArrowPath className="w-5 h-5" />
             </button>
-            {isAdmin && (
+            {canManage && (
               <button
                 onClick={openNuevo}
                 className="btn-primary text-sm flex items-center gap-2"
@@ -178,7 +178,7 @@ export default function CuentasBC() {
                   <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     Estado
                   </th>
-                  {isAdmin && (
+                  {canManage && (
                     <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Acciones
                     </th>
@@ -188,7 +188,7 @@ export default function CuentasBC() {
               <tbody className="divide-y divide-gray-100 dark:divide-white/5">
                 {cuentas.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 5 : 4} className="text-center py-12 text-gray-400 text-sm">
+                    <td colSpan={canManage ? 5 : 4} className="text-center py-12 text-gray-400 text-sm">
                       No hay cuentas BC registradas
                     </td>
                   </tr>
@@ -224,7 +224,7 @@ export default function CuentasBC() {
                           ) : 'Inactiva'}
                         </span>
                       </td>
-                      {isAdmin && (
+                      {canManage && (
                         <td className="px-4 py-3 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button
