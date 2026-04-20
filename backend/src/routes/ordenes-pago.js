@@ -307,14 +307,22 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
           `Auto-avanzando desde ${numCheque}.`
         );
         let probe = numCheque;
+        let found = false;
         for (let i = 0; i < 1000; i++) {
           const probeDup = await client.query(
             `SELECT id FROM financiero.ordenes_pago
              WHERE cuenta_banco_central = $1 AND cheque_numero = $2 LIMIT 1`,
             [selectedCuentaBC, String(probe)]
           );
-          if (probeDup.rows.length === 0) break;
+          if (probeDup.rows.length === 0) { found = true; break; }
           probe++;
+        }
+        if (!found) {
+          await client.query('ROLLBACK');
+          return res.status(500).json({
+            success: false,
+            error: 'No se pudo encontrar un número de cheque libre en el rango. Contacte al administrador.',
+          });
         }
         finalChequeNum = String(probe);
         numCheque = probe;
@@ -324,14 +332,22 @@ router.post('/', authMiddleware, roleMiddleware('admin', 'financiero'), validate
     } else if (selectedCuentaBC && numCheque) {
       // Automático: avanzar hasta encontrar un número libre (auto-curar duplicados)
       let probe = numCheque;
+      let found = false;
       for (let i = 0; i < 1000; i++) {
         const dup = await client.query(
           `SELECT id FROM financiero.ordenes_pago
            WHERE cuenta_banco_central = $1 AND cheque_numero = $2 LIMIT 1`,
           [selectedCuentaBC, String(probe)]
         );
-        if (dup.rows.length === 0) break;
+        if (dup.rows.length === 0) { found = true; break; }
         probe++;
+      }
+      if (!found) {
+        await client.query('ROLLBACK');
+        return res.status(500).json({
+          success: false,
+          error: 'No se pudo encontrar un número de cheque libre en el rango. Contacte al administrador.',
+        });
       }
       finalChequeNum = String(probe);
       numCheque = probe; // actualizar para que el UPDATE de secuencia sea correcto
