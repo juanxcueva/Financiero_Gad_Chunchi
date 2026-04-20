@@ -168,6 +168,7 @@ router.get('/:id', authMiddleware, asyncHandler(async (req, res) => {
   if (result.rows.length === 0) {
     return res.status(404).json({ success: false, error: 'Orden no encontrada' });
   }
+  const orden = result.rows[0];
 
   const retenciones = await pool.query(
     'SELECT * FROM financiero.ordenes_pago_retenciones WHERE orden_pago_id = $1 ORDER BY id',
@@ -183,11 +184,28 @@ router.get('/:id', authMiddleware, asyncHandler(async (req, res) => {
     'SELECT * FROM financiero.firmantes WHERE activo = true ORDER BY orden'
   );
 
+  const legacyOtrosCargos = [];
+  for (let i = 0; i <= 5; i++) {
+    const suffix = i === 0 ? '' : `_${i}`;
+    const razon = orden[`razon_otros_cargos${suffix}`] || '';
+    const valor = parseFloat(orden[`valor_otros_cargos${suffix}`]) || 0;
+    if (razon.trim() || valor !== 0) {
+      legacyOtrosCargos.push({ razon, valor });
+    }
+  }
+
+  const tableOtrosCargos = otrosValores.rows
+    .filter(v => v.tipo === 'CARGO')
+    .map(v => ({ razon: v.concepto || '', valor: parseFloat(v.valor) || 0 }));
+
+  const otrosCargosCompat = legacyOtrosCargos.length > 0 ? legacyOtrosCargos : tableOtrosCargos;
+
   res.json({
     success: true,
     data: {
-      ...result.rows[0],
+      ...orden,
       retenciones: retenciones.rows,
+      otros_cargos: otrosCargosCompat,
       otros_valores: otrosValores.rows,
       firmantes: firmantes.rows,
     },
@@ -728,8 +746,24 @@ router.put('/:id', authMiddleware, roleMiddleware('admin', 'financiero'), valida
     res.json({ success: true, message: 'Orden actualizada' });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Error editando orden:', err);
-    res.status(500).json({ success: false, error: 'Error interno' });
+    console.error('Error editando orden:', err.message, err.detail || '', err.code || '');
+    let errorMsg = 'Error interno';
+    let statusCode = 500;
+    if (err.code === '23505') {
+      errorMsg = 'Conflicto: El cheque o número de orden ya existe';
+      statusCode = 409;
+    } else if (err.code === '23503') {
+      errorMsg = 'Datos inválidos: Referencia a beneficiario o cuenta no existe';
+      statusCode = 400;
+    } else if (err.code === '22P02') {
+      errorMsg = 'Datos inválidos: Formato incorrecto en números o fechas';
+      statusCode = 400;
+    }
+    res.status(statusCode).json({
+      success: false,
+      error: errorMsg,
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    });
   } finally {
     client.release();
   }

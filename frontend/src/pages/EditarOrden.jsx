@@ -250,6 +250,12 @@ export default function EditarOrden() {
       if (isAdmin && numCheque && permitirEditarCheque) {
         body.cheque_numero = numCheque;
       }
+      if (codigoBancoSeleccionado) {
+        body.codigo_banco = codigoBancoSeleccionado;
+      }
+      if (fechaOrden) {
+        body.fecha_orden = fechaOrden;
+      }
       await api.put(`/ordenes-pago/${id}`, body);
       toast.success('Orden actualizada');
       navigate('/ordenes-pago');
@@ -268,13 +274,13 @@ export default function EditarOrden() {
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin w-10 h-10 border-2 border-cyan-400 border-t-transparent rounded-full" /></div>;
 
-  const disabled = orden?.estado === 'ANULADO';
+  const disabled = orden?.situacion === 'ANULADO';
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Editar Orden de Pago</h1>
-        <p className="text-gray-500 text-sm">N° {orden?.numero_orden} — {orden?.estado}</p>
+        <p className="text-gray-500 text-sm">N° {orden?.numero_orden} — {orden?.situacion}</p>
       </motion.div>
 
       {disabled && (

@@ -161,19 +161,22 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   const ivaValor = parseFloat(orden.valor_iva) || 0;
   const ivaPorcentaje = ivaBase > 0 ? (ivaValor / ivaBase) * 100 : 0;
   const detalleTributarioRows = [
-    `<tr>
-      <td>IVA</td>
+    ...(ivaValor > 0 ? [`<tr>
+      <td class="concept">IVA</td>
       <td class="num">${formatMoney(ivaBase)}</td>
       <td class="num">${formatMoney(ivaPorcentaje)}%</td>
-      <td class="num">${formatMoney(ivaValor)}</td>
-    </tr>`,
-    ...retenciones.map(r => `
+      <td class="num value">${formatMoney(ivaValor)}</td>
+    </tr>`] : []),
+    ...retenciones.map(r => {
+      const isManual = (parseFloat(r.base) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0;
+      return `
     <tr>
-      <td>${r.concepto}</td>
-      <td class="num">${formatMoney(r.base)}</td>
-      <td class="num">${formatMoney(r.porcentaje)}%</td>
-      <td class="num">${formatMoney(r.valor)}</td>
-    </tr>`),
+      <td class="concept">${r.concepto}</td>
+      <td class="num">${isManual ? '' : formatMoney(r.base)}</td>
+      <td class="num">${isManual ? '' : `${formatMoney(r.porcentaje)}%`}</td>
+      <td class="num value">${formatMoney(r.valor)}</td>
+    </tr>`;
+    }),
   ].join('');
 
   const preferredCols = getPreferredSignatureColumns(allFirmantes.length);
@@ -238,6 +241,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   .ret-table th, .ret-table td { border: 1px solid #cfcfcf; padding: 3px 6px; }
   .ret-table th { background: #f5f5f5; font-weight: bold; text-align: center; }
   .ret-table .num { text-align: right; white-space: nowrap; }
+  .ret-table .concept, .ret-table .value { font-weight: bold; }
   .summary { margin: 12px 0; padding: 10px 12px; background: #f9f9f9; border: 1px solid #ddd; }
   .summary .total-line { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
   .summary .total-line.big { font-size: 14px; font-weight: bold; border-top: 2px solid #000; padding-top: 8px; margin-top: 5px; }
@@ -278,16 +282,9 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   </div>
 
   <div style="display:flex;gap:40px;">
-    <div>
-      <table class="valores">
-        <tr><td class="label">Valor</td><td class="val">${formatMoney(orden.valor_planilla)}</td></tr>
-        <tr><td class="label">IVA</td><td class="val">${formatMoney(orden.valor_iva)}</td></tr>
-        ${otrosCargosHtml}
-      </table>
-    </div>
-    <div>
+    <div style="flex:1;">
       ${(retenciones.length > 0 || ivaValor > 0) ? `
-      <table class="ret-table">
+      <table class="ret-table" style="width:100%;">
         <tr><th>Concepto</th><th>Base</th><th>%</th><th>Valor</th></tr>
         ${detalleTributarioRows}
       </table>` : ''}
@@ -464,8 +461,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     const noBorders = { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder };
 
     const valRows = [
-      ['Valor', formatMoney(orden.valor_planilla)],
-      ['IVA', formatMoney(orden.valor_iva)],
+      ['Subtotal', formatMoney(orden.valor_planilla)],
     ];
 
     const valTable = new Table({
@@ -484,8 +480,16 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     const ivaValorWord = parseFloat(orden.valor_iva) || 0;
     const ivaPorcentajeWord = ivaBaseWord > 0 ? (ivaValorWord / ivaBaseWord) * 100 : 0;
     const detalleRowsWord = [
-      ['IVA', formatMoney(ivaBaseWord), `${formatMoney(ivaPorcentajeWord)}%`, formatMoney(ivaValorWord)],
-      ...retResult.rows.map(r => [r.concepto, formatMoney(r.base), `${formatMoney(r.porcentaje)}%`, formatMoney(r.valor)]),
+      ...(ivaValorWord > 0 ? [['IVA', formatMoney(ivaBaseWord), `${formatMoney(ivaPorcentajeWord)}%`, formatMoney(ivaValorWord)]] : []),
+      ...retResult.rows.map(r => {
+        const isManual = (parseFloat(r.base) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0;
+        return [
+          r.concepto,
+          isManual ? '' : formatMoney(r.base),
+          isManual ? '' : `${formatMoney(r.porcentaje)}%`,
+          formatMoney(r.valor),
+        ];
+      }),
     ];
 
     if (detalleRowsWord.length > 0) {
@@ -508,10 +512,10 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
           }),
           ...detalleRowsWord.map(([concepto, base, porcentaje, valor]) => new TableRow({
             children: [
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ children: [new TextRun({ text: concepto, size: 18 })] })] }),
+              new TableCell({ borders: thinBorders, children: [new Paragraph({ children: [new TextRun({ text: concepto, size: 18, bold: true })] })] }),
               new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: base, size: 18 })] })] }),
               new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: porcentaje, size: 18 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: valor, size: 18 })] })] }),
+              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: valor, size: 18, bold: true })] })] }),
             ],
           })),
         ],
