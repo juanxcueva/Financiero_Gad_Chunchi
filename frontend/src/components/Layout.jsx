@@ -83,7 +83,7 @@ export default function Layout({ children }) {
         <nav className="flex-1 px-2 pb-2 space-y-0.5 overflow-y-auto">
           {menuItems.map((item) => {
             if (item.path === '/configuracion' && user.rol !== 'admin') return null;
-            if (item.path === '/cuentas-bc' && user.rol !== 'admin') return null;
+            if (item.path === '/cuentas-bc' && !['admin', 'financiero'].includes(user.rol)) return null;
             if (item.path === '/auditoria' && !['admin', 'auditor'].includes(user.rol)) return null;
             if (item.path === '/ordenes-pago/nueva' && !['admin', 'financiero'].includes(user.rol)) return null;
 
