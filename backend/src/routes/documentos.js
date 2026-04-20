@@ -153,7 +153,7 @@ async function renderPdfBuffer(html) {
 
 function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   const allFirmantes = [
-    { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '' },
+    { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '', identificacion: orden.codigo_beneficiario || '' },
     ...firmantes,
   ];
 
@@ -167,13 +167,14 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   const firmantesRows = buildBalancedRows(allFirmantes, preferredCols);
   const maxFirmantesCols = Math.max(1, ...firmantesRows.map(r => r.length));
 
-  const buildFirmaCellHtml = (cargo, nombre) => `
+  const buildFirmaCellHtml = (cargo, nombre, identificacion = '') => `
     <td style="text-align:center;padding:5px;border:none;width:${(100 / maxFirmantesCols).toFixed(2)}%;">
       <div class="firma-box">
         <div style="height:50px;"></div>
         <div class="firma-linea"></div>
         <div class="firma-cargo">${cargo}</div>
         <div class="firma-nombre">${nombre}</div>
+        <div class="firma-identificacion">${identificacion}</div>
       </div>
     </td>`;
 
@@ -181,7 +182,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
     const { left, right } = padRowToColumns(row, maxFirmantesCols);
     const leftEmpty = Array.from({ length: left }, () => '<td style="border:none;"></td>').join('');
     const rightEmpty = Array.from({ length: right }, () => '<td style="border:none;"></td>').join('');
-    const content = row.map((f) => buildFirmaCellHtml(f.cargo, f.nombre)).join('');
+    const content = row.map((f) => buildFirmaCellHtml(f.cargo, f.nombre, f.identificacion)).join('');
     return `<tr>${leftEmpty}${content}${rightEmpty}</tr>`;
   }).join('');
 
@@ -208,8 +209,8 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
 <style>
   @page { size: A4; margin: 20mm 15mm; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #000; line-height: 1.4; }
-  .header { text-align: center; margin-bottom: 10px; }
-  .header img { width: 100px; margin-bottom: 8px; }
+  .header { text-align: center; margin-top: -8px; margin-bottom: 10px; }
+  .header img { width: 100px; margin-bottom: 6px; }
   .header h1 { font-size: 16px; margin: 2px 0; letter-spacing: 1px; }
   .header h2 { font-size: 13px; margin: 2px 0; font-weight: normal; }
   .header .num { font-size: 22px; font-weight: bold; color: #c00; }
@@ -235,6 +236,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   .firma-linea { border-top: 1px solid #000; padding-top: 2px; margin-bottom: 8px; min-height: 0px; }
   .firma-nombre { font-size: 11px; }
   .firma-cargo { font-weight: bold; font-size: 11px; margin-bottom: 2px; }
+  .firma-identificacion { font-size: 11px; margin-top: 2px; }
   .firmas-grid { margin-top: 8px; }
   .firmas-compact { width: 100%; border-collapse: separate; border-spacing: 10px 8px; }
   .firmas-compact td { width: 25%; vertical-align: top; }
@@ -253,7 +255,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   </div>
   <div class="info-row">
     <span><strong>BENEFICIARIO:</strong> ${orden.nombre_beneficiario}</span>
-    <span>${orden.codigo_beneficiario || ''}</span>
+    <span><strong>C.I/RUC:</strong> ${orden.codigo_beneficiario || ''}</span>
   </div>
 
   <div class="detail-box">
@@ -286,7 +288,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   <div class="letras">${numeroALetras(parseFloat(orden.liquido_pagar) || 0)}</div>
 
   <div class="cheque-info">
-    Cheque Nº ${orden.cheque_numero || ''} &nbsp;&nbsp;
+    Cheque / Transferencia ${orden.cheque_numero || ''} &nbsp;&nbsp;
     Cuenta BC: ${orden.cuenta_banco_central || '—'}
   </div>
 
@@ -419,6 +421,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       const logoBuffer = fs.readFileSync(LOGO_PATH);
       headerChildren.unshift(new Paragraph({
         alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 20 },
         children: [new ImageRun({ data: logoBuffer, transformation: { width: 100, height: 100 }, type: 'png' })],
       }));
     }
@@ -431,7 +434,9 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     children.push(new Paragraph({ children: [new TextRun({ text: `FECHA: ${d.getUTCDate()} de ${meses[d.getUTCMonth()]} de ${d.getUTCFullYear()}`, size: 20 })] }));
     children.push(new Paragraph({ children: [
       new TextRun({ text: 'BENEFICIARIO: ', bold: true, size: 20 }),
-      new TextRun({ text: `${orden.nombre_beneficiario}    ${orden.codigo_beneficiario || ''}`, size: 20 }),
+      new TextRun({ text: `${orden.nombre_beneficiario}    `, size: 20 }),
+      new TextRun({ text: 'C.I/RUC: ', bold: true, size: 20 }),
+      new TextRun({ text: `${orden.codigo_beneficiario || ''}`, size: 20 }),
     ] }));
     children.push(new Paragraph({ children: [] }));
 
@@ -527,19 +532,19 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
 
     // Cheque info
     children.push(new Paragraph({ children: [
-      new TextRun({ text: `Cheque Nº ${orden.cheque_numero || ''}  —  Cuenta BC: ${orden.cuenta_banco_central || '—'}`, size: 18, color: '666666' }),
+      new TextRun({ text: `Cheque / Transferencia ${orden.cheque_numero || ''}  —  Cuenta BC: ${orden.cuenta_banco_central || '—'}`, size: 18, color: '666666' }),
     ] }));
 
     // Signatures
     const allFirmantesWord = [
-      { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '' },
+      { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '', identificacion: orden.codigo_beneficiario || '' },
       ...firmResult.rows,
     ];
     const preferredWordCols = getPreferredSignatureColumns(allFirmantesWord.length);
     const wordRows = buildBalancedRows(allFirmantesWord, preferredWordCols);
     const maxCols = Math.max(1, ...wordRows.map(r => r.length));
 
-    const buildWordSignatureCell = (cargo, nombre) => new TableCell({
+    const buildWordSignatureCell = (cargo, nombre, identificacion = '') => new TableCell({
       borders: noBorders,
       width: { size: Math.floor(100 / maxCols), type: WidthType.PERCENTAGE },
       children: [
@@ -547,6 +552,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
         new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 40 }, children: [new TextRun({ text: '________________________', size: 18 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 20 }, children: [new TextRun({ text: cargo, bold: true, size: 18 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 20 }, children: [new TextRun({ text: nombre, size: 18 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 20 }, children: [new TextRun({ text: identificacion, size: 18 })] }),
       ],
     });
 
@@ -558,7 +564,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
         cells.push(new TableCell({ borders: noBorders, children: [new Paragraph({ children: [] })] }));
       }
       for (const f of row) {
-        cells.push(buildWordSignatureCell(f.cargo, f.nombre));
+        cells.push(buildWordSignatureCell(f.cargo, f.nombre, f.identificacion));
       }
       for (let i = 0; i < right; i++) {
         cells.push(new TableCell({ borders: noBorders, children: [new Paragraph({ children: [] })] }));
@@ -573,7 +579,19 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     }));
 
     const doc = new Document({
-      sections: [{ children }],
+      sections: [{
+        properties: {
+          page: {
+            margin: {
+              top: 720,
+              right: 1134,
+              bottom: 1134,
+              left: 1134,
+            },
+          },
+        },
+        children,
+      }],
     });
 
     const buffer = await documentQueue.enqueue(() => Packer.toBuffer(doc));
