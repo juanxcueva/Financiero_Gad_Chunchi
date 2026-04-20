@@ -8,6 +8,7 @@ import PdfViewer from '../components/PdfViewer';
 import MultiLineDropdown from '../components/MultiLineDropdown';
 
 const formatMoney = (v) => parseFloat(v || 0).toFixed(2);
+const DEFAULT_CUENTA_BC = '79220009';
 
 export default function NuevaOrden() {
   const navigate = useNavigate();
@@ -78,20 +79,20 @@ export default function NuevaOrden() {
       setCuentasBancarias(cuentas);
       setCuentasBCCatalogo(cuentasCatalogo);
       if (cuentasCatalogo.length > 0) {
-        const firstCuenta = cuentasCatalogo[0];
-        setCuentaBcSeleccionada(firstCuenta.cuenta_bancaria);
-        if (firstCuenta.siguiente_numero_transfer) {
-          setNumCheque(String(firstCuenta.siguiente_numero_transfer));
+        const preferredCuenta = cuentasCatalogo.find((c) => c.cuenta_bancaria === DEFAULT_CUENTA_BC) || cuentasCatalogo[0];
+        setCuentaBcSeleccionada(preferredCuenta.cuenta_bancaria);
+        if (preferredCuenta.siguiente_numero_transfer) {
+          setNumCheque(String(preferredCuenta.siguiente_numero_transfer));
           chequeEditadoManualmenteRef.current = false;
         }
 
-        const firstBank = cuentas.find(c => c.cuenta_bancaria === firstCuenta.cuenta_bancaria);
+        const firstBank = cuentas.find(c => c.cuenta_bancaria === preferredCuenta.cuenta_bancaria);
         setCodigoBancoSeleccionado(firstBank?.codigo_banco || '');
       } else if (cuentas.length > 0) {
-        const firstBank = cuentas[0];
-        setCuentaBcSeleccionada(firstBank.cuenta_bancaria);
-        setCodigoBancoSeleccionado(firstBank.codigo_banco);
-        setNumCheque(String(firstBank.siguiente_numero_cheque));
+        const preferredBank = cuentas.find((c) => c.cuenta_bancaria === DEFAULT_CUENTA_BC) || cuentas[0];
+        setCuentaBcSeleccionada(preferredBank.cuenta_bancaria);
+        setCodigoBancoSeleccionado(preferredBank.codigo_banco);
+        setNumCheque(String(preferredBank.siguiente_numero_cheque));
       }
     }).catch(() => toast.error('Error cargando configuración'));
   }, []);
