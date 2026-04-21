@@ -317,7 +317,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64, otrosValor
       ${(ivaValor > 0 || otrosCargosRows.length > 0) ? `
       <div style="font-weight: bold; font-size: 11px; margin-bottom: 4px;">IMPUESTO AL VALOR AGREGADO (IVA)</div>
       <table class="ret-table" style="width:100%;">
-        <tr><th>Descripción</th><th>Base</th><th>%</th><th>Valor</th></tr>
+        <tr><th>Descripción</th><th>Subtotal</th><th>%</th><th>Total</th></tr>
         ${ivaOtrosCargosRows}
       </table>
       ` : ''}
@@ -588,9 +588,9 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
             new TableRow({
               children: [
                 new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Descripción', bold: true, size: 19 })] })] }),
-                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Base', bold: true, size: 19 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Subtotal', bold: true, size: 19 })] })] }),
                 new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '%', bold: true, size: 19 })] })] }),
-                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Valor', bold: true, size: 19 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Total', bold: true, size: 19 })] })] }),
               ],
             }),
             ...ivaOtrosCargosRowsWord.map(([concepto, base, porcentaje, valor]) => new TableRow({
