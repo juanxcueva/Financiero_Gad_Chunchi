@@ -151,7 +151,7 @@ async function renderPdfBuffer(html) {
   }
 }
 
-function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
+function buildHtml(orden, retenciones, firmantes, config, logoBase64, otrosValores = []) {
   const allFirmantes = [
     { cargo: 'C.I. Interesado', nombre: orden.nombre_beneficiario || '', identificacion: orden.codigo_beneficiario || '' },
     ...firmantes,
@@ -167,11 +167,45 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   ];
   const otrosCargosRows = cargos.filter(c => c.r && parseFloat(c.v) > 0);
 
+  // Separar otros_valores por tipo
+  const otrosCargosDeducidos = (otrosValores || [])
+    .filter(v => v.tipo === 'CARGO')
+    .map(v => ({ r: v.concepto || '', v: v.valor || 0 }));
+  
+  const otrosDeduccionesRetenidos = (otrosValores || [])
+    .filter(v => v.tipo === 'DEDUCCION')
+    .map(v => ({ concepto: v.concepto || '', valor: v.valor || 0 }));
+
   const ivaBase = parseFloat(orden.valor_planilla) || 0;
   const ivaValor = parseFloat(orden.valor_iva) || 0;
   const ivaPorcentaje = ivaBase > 0 ? (ivaValor / ivaBase) * 100 : 0;
 
-  // Retenciones and Otros Cargos table rows
+  // IVA and Otros Cargos table rows (left side)
+  const ivaOtrosCargosRows = [
+    ...(ivaValor > 0 ? [`
+    <tr>
+      <td class="concept">IVA</td>
+      <td class="num">${formatMoney(ivaBase)}</td>
+      <td class="num">${formatMoney(ivaPorcentaje)}%</td>
+      <td class="num value">${formatMoney(ivaValor)}</td>
+    </tr>`] : []),
+    ...otrosCargosRows.map(c => `
+    <tr>
+      <td class="concept">${c.r}</td>
+      <td class="num"></td>
+      <td class="num"></td>
+      <td class="num value">${formatMoney(c.v)}</td>
+    </tr>`),
+    ...otrosCargosDeducidos.map(c => `
+    <tr>
+      <td class="concept">${c.r}</td>
+      <td class="num"></td>
+      <td class="num"></td>
+      <td class="num value">${formatMoney(c.v)}</td>
+    </tr>`),
+  ].join('');
+
+  // Retenciones only (right side)
   const retencionesCargosRows = [
     ...retenciones.map(r => {
       const isManual = (parseFloat(r.base) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0;
@@ -183,12 +217,12 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
       <td class="num value">${formatMoney(r.valor)}</td>
     </tr>`;
     }),
-    ...otrosCargosRows.map(c => `
+    ...otrosDeduccionesRetenidos.map(c => `
     <tr>
-      <td class="concept">${c.r}</td>
+      <td class="concept">${c.concepto}</td>
       <td class="num"></td>
       <td class="num"></td>
-      <td class="num value">${formatMoney(c.v)}</td>
+      <td class="num value">${formatMoney(c.valor)}</td>
     </tr>`),
   ].join('');
 
@@ -280,22 +314,17 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
 
   <div style="display:flex;gap:30px;margin-bottom:12px;">
     <div style="flex:1;">
-      ${ivaValor > 0 ? `
+      ${(ivaValor > 0 || otrosCargosRows.length > 0) ? `
       <div style="font-weight: bold; font-size: 11px; margin-bottom: 4px;">IMPUESTO AL VALOR AGREGADO (IVA)</div>
       <table class="ret-table" style="width:100%;">
         <tr><th>Descripción</th><th>Base</th><th>%</th><th>Valor</th></tr>
-        <tr>
-          <td class="concept">IVA</td>
-          <td class="num">${formatMoney(ivaBase)}</td>
-          <td class="num">${formatMoney(ivaPorcentaje)}%</td>
-          <td class="num value">${formatMoney(ivaValor)}</td>
-        </tr>
+        ${ivaOtrosCargosRows}
       </table>
       ` : ''}
     </div>
     <div style="flex:1;">
-      ${(retenciones.length > 0 || otrosCargosRows.length > 0) ? `
-      <div style="font-weight: bold; font-size: 11px; margin-bottom: 4px;">RETENCIONES Y OTROS CARGOS</div>
+      ${(retenciones.length > 0) ? `
+      <div style="font-weight: bold; font-size: 11px; margin-bottom: 4px;">RETENCIONES</div>
       <table class="ret-table" style="width:100%;">
         <tr><th>Descripción</th><th>Base</th><th>%</th><th>Valor</th></tr>
         ${retencionesCargosRows}
@@ -336,10 +365,11 @@ router.get('/:id/pdf', authMiddleware, asyncHandler(async (req, res) => {
     }
     const orden = ordenResult.rows[0];
 
-    const [retResult, firmResult, configResult] = await Promise.all([
+    const [retResult, firmResult, configResult, otrosValoresResult] = await Promise.all([
       pool.query('SELECT * FROM financiero.ordenes_pago_retenciones WHERE orden_pago_id = $1 ORDER BY id', [req.params.id]),
       pool.query('SELECT * FROM financiero.firmantes WHERE activo = true ORDER BY orden'),
       pool.query('SELECT clave, valor FROM financiero.configuracion'),
+      pool.query('SELECT * FROM financiero.ordenes_pago_otros_valores WHERE orden_pago_id = $1 ORDER BY id', [req.params.id]),
     ]);
 
     const config = {};
@@ -377,7 +407,7 @@ router.get('/:id/pdf', authMiddleware, asyncHandler(async (req, res) => {
     let pendingTask = pendingPdfTasks.get(cacheKey);
     if (!pendingTask) {
       pendingTask = documentQueue.enqueue(async () => {
-        const html = buildHtml(orden, retResult.rows, firmResult.rows, config, logoBase64);
+        const html = buildHtml(orden, retResult.rows, firmResult.rows, config, logoBase64, otrosValoresResult.rows);
         const pdfBuffer = await renderPdfBuffer(html);
         setCachedPdf(cacheKey, pdfBuffer);
         return pdfBuffer;
@@ -428,6 +458,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     const retResult = await pool.query('SELECT * FROM financiero.ordenes_pago_retenciones WHERE orden_pago_id = $1 ORDER BY id', [req.params.id]);
     const firmResult = await pool.query('SELECT * FROM financiero.firmantes WHERE activo = true ORDER BY orden');
     const configResult = await pool.query('SELECT clave, valor FROM financiero.configuracion');
+    const otrosValoresResult = await pool.query('SELECT * FROM financiero.ordenes_pago_otros_valores WHERE orden_pago_id = $1 ORDER BY id', [req.params.id]);
     const config = {};
     configResult.rows.forEach(r => { config[r.clave] = r.valor; });
 
@@ -488,7 +519,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     });
     children.push(valTable);
 
-    // IVA + Retenciones (detalle con encabezados claros)
+    // IVA + Otros Cargos Table rows (left)
     const otrosCargosWord = [
       { r: orden.razon_otros_cargos, v: orden.valor_otros_cargos },
       { r: orden.razon_otros_cargos_1, v: orden.valor_otros_cargos_1 },
@@ -498,6 +529,15 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       { r: orden.razon_otros_cargos_5, v: orden.valor_otros_cargos_5 },
     ].filter(c => c.r && parseFloat(c.v) > 0);
 
+    // Separar otros_valores por tipo
+    const otrosCargosDeducidosWord = (otrosValoresResult.rows || [])
+      .filter(v => v.tipo === 'CARGO')
+      .map(v => ({ r: v.concepto || '', v: v.valor || 0 }));
+
+    const otrosDeduccionesReteridosWord = (otrosValoresResult.rows || [])
+      .filter(v => v.tipo === 'DEDUCCION')
+      .map(v => ({ concepto: v.concepto || '', valor: v.valor || 0 }));
+
     const ivaBaseWord = parseFloat(orden.valor_planilla) || 0;
     const ivaValorWord = parseFloat(orden.valor_iva) || 0;
     const ivaPorcentajeWord = ivaBaseWord > 0 ? (ivaValorWord / ivaBaseWord) * 100 : 0;
@@ -505,7 +545,19 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     const thinBorder = { style: BorderStyle.SINGLE, size: 2, color: 'BDBDBD' };
     const thinBorders = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
 
-    // Retenciones and Otros Cargos Table rows
+    // IVA and Otros Cargos rows (left side)
+    const ivaOtrosCargosRowsWord = [
+      ...(ivaValorWord > 0 ? [[
+        'IVA',
+        formatMoney(ivaBaseWord),
+        `${formatMoney(ivaPorcentajeWord)}%`,
+        formatMoney(ivaValorWord),
+      ]] : []),
+      ...otrosCargosWord.map(c => [c.r, '', '', formatMoney(c.v)]),
+      ...otrosCargosDeducidosWord.map(c => [c.r, '', '', formatMoney(c.v)]),
+    ];
+
+    // Retenciones only Table rows (right side)
     const retencionesCargosRowsWord = [
       ...retResult.rows.map(r => {
         const isManual = (parseFloat(r.base) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0;
@@ -516,11 +568,11 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
           formatMoney(r.valor),
         ];
       }),
-      ...otrosCargosWord.map(c => [c.r, '', '', formatMoney(c.v)]),
+      ...otrosDeduccionesReteridosWord.map(c => [c.concepto, '', '', formatMoney(c.valor)]),
     ];
 
     // Create container table for side-by-side layout
-    if (ivaValorWord > 0 || retencionesCargosRowsWord.length > 0) {
+    if (ivaOtrosCargosRowsWord.length > 0 || retencionesCargosRowsWord.length > 0) {
       children.push(new Paragraph({ children: [] }));
 
       const noBorderContainer = { style: BorderStyle.NONE, size: 0 };
@@ -528,8 +580,8 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
 
       const containerCells = [];
 
-      // Left cell: IVA
-      if (ivaValorWord > 0) {
+      // Left cell: IVA + Otros Cargos
+      if (ivaOtrosCargosRowsWord.length > 0) {
         const ivaTableContent = new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
           rows: [
@@ -541,14 +593,14 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
                 new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Valor', bold: true, size: 19 })] })] }),
               ],
             }),
-            new TableRow({
+            ...ivaOtrosCargosRowsWord.map(([concepto, base, porcentaje, valor]) => new TableRow({
               children: [
-                new TableCell({ borders: thinBorders, children: [new Paragraph({ children: [new TextRun({ text: 'IVA', size: 18, bold: true })] })] }),
-                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: formatMoney(ivaBaseWord), size: 18 })] })] }),
-                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: `${formatMoney(ivaPorcentajeWord)}%`, size: 18 })] })] }),
-                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: formatMoney(ivaValorWord), size: 18, bold: true })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ children: [new TextRun({ text: concepto, size: 18, bold: true })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: base, size: 18 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: porcentaje, size: 18 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: valor, size: 18, bold: true })] })] }),
               ],
-            }),
+            })),
           ],
         });
 
@@ -568,7 +620,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
         containerCells.push(new TableCell({ borders: noBordersContainer, children: [new Paragraph({ children: [] })] }));
       }
 
-      // Right cell: Retenciones y Otros Cargos
+      // Right cell: Retenciones only
       if (retencionesCargosRowsWord.length > 0) {
         const retTableContent = new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
@@ -598,7 +650,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
             width: { size: 45, type: WidthType.PERCENTAGE },
             verticalAlign: VerticalAlign.TOP,
             children: [
-              new Paragraph({ children: [new TextRun({ text: 'RETENCIONES Y OTROS CARGOS', bold: true, size: 20 })] }),
+              new Paragraph({ children: [new TextRun({ text: 'RETENCIONES', bold: true, size: 20 })] }),
               new Paragraph({ children: [] }),
               retTableContent,
             ],
