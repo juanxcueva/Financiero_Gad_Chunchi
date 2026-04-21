@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const puppeteer = require('puppeteer');
 const crypto = require('crypto');
-const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, ImageRun } = require('docx');
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, ImageRun, VerticalAlign } = require('docx');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/database');
@@ -171,23 +171,7 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
   const ivaValor = parseFloat(orden.valor_iva) || 0;
   const ivaPorcentaje = ivaBase > 0 ? (ivaValor / ivaBase) * 100 : 0;
 
-  // IVA table (separate)
-  const ivaTableHtml = ivaValor > 0 ? `
-    <div style="margin-bottom: 12px;">
-      <div style="font-weight: bold; font-size: 11px; margin-bottom: 4px;">IMPUESTO AL VALOR AGREGADO (IVA)</div>
-      <table class="ret-table" style="width:100%;">
-        <tr><th>Descripción</th><th>Base</th><th>%</th><th>Valor</th></tr>
-        <tr>
-          <td class="concept">IVA</td>
-          <td class="num">${formatMoney(ivaBase)}</td>
-          <td class="num">${formatMoney(ivaPorcentaje)}%</td>
-          <td class="num value">${formatMoney(ivaValor)}</td>
-        </tr>
-      </table>
-    </div>
-  ` : '';
-
-  // Retenciones and Otros Cargos table (separate)
+  // Retenciones and Otros Cargos table rows
   const retencionesCargosRows = [
     ...retenciones.map(r => {
       const isManual = (parseFloat(r.base) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0;
@@ -207,16 +191,6 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
       <td class="num value">${formatMoney(c.v)}</td>
     </tr>`),
   ].join('');
-
-  const retencionesCargosTableHtml = (retenciones.length > 0 || otrosCargosRows.length > 0) ? `
-    <div style="margin-bottom: 12px;">
-      <div style="font-weight: bold; font-size: 11px; margin-bottom: 4px;">RETENCIONES Y OTROS CARGOS</div>
-      <table class="ret-table" style="width:100%;">
-        <tr><th>Descripción</th><th>Base</th><th>%</th><th>Valor</th></tr>
-        ${retencionesCargosRows}
-      </table>
-    </div>
-  ` : '';
 
   const preferredCols = getPreferredSignatureColumns(allFirmantes.length);
   const firmantesRows = buildBalancedRows(allFirmantes, preferredCols);
@@ -304,10 +278,29 @@ function buildHtml(orden, retenciones, firmantes, config, logoBase64) {
     ${(orden.detalle || '').replace(/\r?\n/g, '<br/>')}
   </div>
 
-  <div style="display:flex;gap:40px;">
+  <div style="display:flex;gap:30px;margin-bottom:12px;">
     <div style="flex:1;">
-      ${ivaTableHtml}
-      ${retencionesCargosTableHtml}
+      ${ivaValor > 0 ? `
+      <div style="font-weight: bold; font-size: 11px; margin-bottom: 4px;">IMPUESTO AL VALOR AGREGADO (IVA)</div>
+      <table class="ret-table" style="width:100%;">
+        <tr><th>Descripción</th><th>Base</th><th>%</th><th>Valor</th></tr>
+        <tr>
+          <td class="concept">IVA</td>
+          <td class="num">${formatMoney(ivaBase)}</td>
+          <td class="num">${formatMoney(ivaPorcentaje)}%</td>
+          <td class="num value">${formatMoney(ivaValor)}</td>
+        </tr>
+      </table>
+      ` : ''}
+    </div>
+    <div style="flex:1;">
+      ${(retenciones.length > 0 || otrosCargosRows.length > 0) ? `
+      <div style="font-weight: bold; font-size: 11px; margin-bottom: 4px;">RETENCIONES Y OTROS CARGOS</div>
+      <table class="ret-table" style="width:100%;">
+        <tr><th>Descripción</th><th>Base</th><th>%</th><th>Valor</th></tr>
+        ${retencionesCargosRows}
+      </table>
+      ` : ''}
     </div>
   </div>
 
@@ -512,37 +505,7 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
     const thinBorder = { style: BorderStyle.SINGLE, size: 2, color: 'BDBDBD' };
     const thinBorders = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
 
-    // IVA Table (separate)
-    if (ivaValorWord > 0) {
-      children.push(new Paragraph({ children: [] }));
-      children.push(new Paragraph({ children: [new TextRun({ text: 'IMPUESTO AL VALOR AGREGADO (IVA)', bold: true, size: 20 })] }));
-      children.push(new Paragraph({ children: [] }));
-
-      const ivaTableWord = new Table({
-        width: { size: 70, type: WidthType.PERCENTAGE },
-        rows: [
-          new TableRow({
-            children: [
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Descripción', bold: true, size: 19 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Base', bold: true, size: 19 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '%', bold: true, size: 19 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Valor', bold: true, size: 19 })] })] }),
-            ],
-          }),
-          new TableRow({
-            children: [
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ children: [new TextRun({ text: 'IVA', size: 18, bold: true })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: formatMoney(ivaBaseWord), size: 18 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: `${formatMoney(ivaPorcentajeWord)}%`, size: 18 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: formatMoney(ivaValorWord), size: 18, bold: true })] })] }),
-            ],
-          }),
-        ],
-      });
-      children.push(ivaTableWord);
-    }
-
-    // Retenciones and Otros Cargos Table (separate)
+    // Retenciones and Otros Cargos Table rows
     const retencionesCargosRowsWord = [
       ...retResult.rows.map(r => {
         const isManual = (parseFloat(r.base) || 0) === 0 && (parseFloat(r.porcentaje) || 0) === 0;
@@ -556,33 +519,105 @@ router.get('/:id/word', authMiddleware, asyncHandler(async (req, res) => {
       ...otrosCargosWord.map(c => [c.r, '', '', formatMoney(c.v)]),
     ];
 
-    if (retencionesCargosRowsWord.length > 0) {
-      children.push(new Paragraph({ children: [] }));
-      children.push(new Paragraph({ children: [new TextRun({ text: 'RETENCIONES Y OTROS CARGOS', bold: true, size: 20 })] }));
+    // Create container table for side-by-side layout
+    if (ivaValorWord > 0 || retencionesCargosRowsWord.length > 0) {
       children.push(new Paragraph({ children: [] }));
 
-      const retencionesCargosTableWord = new Table({
-        width: { size: 70, type: WidthType.PERCENTAGE },
+      const noBorderContainer = { style: BorderStyle.NONE, size: 0 };
+      const noBordersContainer = { top: noBorderContainer, bottom: noBorderContainer, left: noBorderContainer, right: noBorderContainer };
+
+      const containerCells = [];
+
+      // Left cell: IVA
+      if (ivaValorWord > 0) {
+        const ivaTableContent = new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Descripción', bold: true, size: 19 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Base', bold: true, size: 19 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '%', bold: true, size: 19 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Valor', bold: true, size: 19 })] })] }),
+              ],
+            }),
+            new TableRow({
+              children: [
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ children: [new TextRun({ text: 'IVA', size: 18, bold: true })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: formatMoney(ivaBaseWord), size: 18 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: `${formatMoney(ivaPorcentajeWord)}%`, size: 18 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: formatMoney(ivaValorWord), size: 18, bold: true })] })] }),
+              ],
+            }),
+          ],
+        });
+
+        containerCells.push(
+          new TableCell({
+            borders: noBordersContainer,
+            width: { size: 45, type: WidthType.PERCENTAGE },
+            verticalAlign: VerticalAlign.TOP,
+            children: [
+              new Paragraph({ children: [new TextRun({ text: 'IMPUESTO AL VALOR AGREGADO (IVA)', bold: true, size: 20 })] }),
+              new Paragraph({ children: [] }),
+              ivaTableContent,
+            ],
+          })
+        );
+      } else {
+        containerCells.push(new TableCell({ borders: noBordersContainer, children: [new Paragraph({ children: [] })] }));
+      }
+
+      // Right cell: Retenciones y Otros Cargos
+      if (retencionesCargosRowsWord.length > 0) {
+        const retTableContent = new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Descripción', bold: true, size: 19 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Base', bold: true, size: 19 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '%', bold: true, size: 19 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Valor', bold: true, size: 19 })] })] }),
+              ],
+            }),
+            ...retencionesCargosRowsWord.map(([concepto, base, porcentaje, valor]) => new TableRow({
+              children: [
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ children: [new TextRun({ text: concepto, size: 18, bold: true })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: base, size: 18 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: porcentaje, size: 18 })] })] }),
+                new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: valor, size: 18, bold: true })] })] }),
+              ],
+            })),
+          ],
+        });
+
+        containerCells.push(
+          new TableCell({
+            borders: noBordersContainer,
+            width: { size: 45, type: WidthType.PERCENTAGE },
+            verticalAlign: VerticalAlign.TOP,
+            children: [
+              new Paragraph({ children: [new TextRun({ text: 'RETENCIONES Y OTROS CARGOS', bold: true, size: 20 })] }),
+              new Paragraph({ children: [] }),
+              retTableContent,
+            ],
+          })
+        );
+      } else {
+        containerCells.push(new TableCell({ borders: noBordersContainer, children: [new Paragraph({ children: [] })] }));
+      }
+
+      const containerTable = new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
         rows: [
           new TableRow({
-            children: [
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Descripción', bold: true, size: 19 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Base', bold: true, size: 19 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '%', bold: true, size: 19 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Valor', bold: true, size: 19 })] })] }),
-            ],
+            children: containerCells,
           }),
-          ...retencionesCargosRowsWord.map(([concepto, base, porcentaje, valor]) => new TableRow({
-            children: [
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ children: [new TextRun({ text: concepto, size: 18, bold: true })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: base, size: 18 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: porcentaje, size: 18 })] })] }),
-              new TableCell({ borders: thinBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: valor, size: 18, bold: true })] })] }),
-            ],
-          })),
         ],
       });
-      children.push(retencionesCargosTableWord);
+
+      children.push(containerTable);
     }
 
     children.push(new Paragraph({ children: [] }));
